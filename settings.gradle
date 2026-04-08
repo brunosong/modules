@@ -1,0 +1,7 @@
+rootProject.name = 'modules'
+
+include 'chatting:chatting-domain'
+include 'chatting:chatting-application'
+include 'chatting:chatting-adapter-in-web'
+include 'chatting:chatting-adapter-out-persistence'
+include 'chatting:chatting-bootstrap'

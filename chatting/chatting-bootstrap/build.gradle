@@ -1,0 +1,11 @@
+dependencies {
+    implementation project(':chatting:chatting-domain')
+    implementation project(':chatting:chatting-application')
+    implementation project(':chatting:chatting-adapter-in-web')
+    implementation project(':chatting:chatting-adapter-out-persistence')
+    implementation 'org.springframework.boot:spring-boot-starter'
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+}
+
+tasks.named('bootJar') { enabled = true }
+tasks.named('jar') { enabled = false }

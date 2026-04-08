@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>상담요청</title>
+    <style>
+        body { font-family: -apple-system, sans-serif; max-width: 420px; margin: 80px auto; }
+        form { display: flex; flex-direction: column; gap: 12px; }
+        input { padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 16px; }
+        button { padding: 12px; background: #2b6cb0; color: white; border: 0; border-radius: 6px; font-size: 16px; cursor: pointer; }
+    </style>
+</head>
+<body>
+<h1>상담 요청</h1>
+<p>이름을 입력하면 새 상담방이 생성됩니다.</p>
+<form method="get" th:action="@{/client}">
+    <input type="text" name="name" placeholder="이름" required />
+    <button type="submit">상담요청</button>
+</form>
+</body>
+</html>

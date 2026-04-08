@@ -1,0 +1,6 @@
+dependencies {
+    implementation project(':chatting:chatting-application')
+    implementation project(':chatting:chatting-domain')
+    implementation 'org.springframework.boot:spring-boot-starter-websocket'
+    implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
+}

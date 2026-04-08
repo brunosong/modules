@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>상담사 - 대기 목록</title>
+    <style>
+        body { font-family: -apple-system, sans-serif; max-width: 720px; margin: 24px auto; padding: 0 16px; }
+        h1 { font-size: 18px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 10px; border-bottom: 1px solid #eee; text-align: left; font-size: 14px; }
+        th { background: #f6f6f6; }
+        .status { padding: 2px 8px; border-radius: 999px; font-size: 12px; color: white; }
+        .WAITING { background: #d97706; }
+        .ACTIVE  { background: #16a34a; }
+        .CLOSED  { background: #888; }
+        a { color: #2b6cb0; text-decoration: none; font-weight: 600; }
+        .empty { color: #888; padding: 24px; text-align: center; }
+    </style>
+</head>
+<body>
+<h1>상담 대기/진행 목록 (2초마다 갱신)</h1>
+<table>
+    <thead>
+    <tr><th>고객</th><th>상태</th><th>최근 메시지</th><th>방 ID</th><th></th></tr>
+    </thead>
+    <tbody id="rows"></tbody>
+</table>
+<div id="empty" class="empty">대기중인 상담이 없습니다.</div>
+
+<script>
+    async function refresh() {
+        const res = await fetch('/api/rooms');
+        const rooms = await res.json();
+        const tbody = document.getElementById('rows');
+        const empty = document.getElementById('empty');
+        tbody.innerHTML = '';
+        if (rooms.length === 0) { empty.style.display = 'block'; return; }
+        empty.style.display = 'none';
+        for (const r of rooms) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${escapeHtml(r.clientName)}</td>
+                <td><span class="status ${r.status}">${r.status}</span></td>
+                <td>${escapeHtml(r.lastMessage || '-')}</td>
+                <td><code>${r.id.substring(0,8)}</code></td>
+                <td><a href="/admin/chat?roomId=${encodeURIComponent(r.id)}">입장</a></td>
+            `;
+            tbody.appendChild(tr);
+        }
+    }
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+    refresh();
+    setInterval(refresh, 2000);
+</script>
+</body>
+</html>

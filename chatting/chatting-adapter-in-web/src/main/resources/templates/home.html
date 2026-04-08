@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>상담 채팅</title>
+    <style>
+        body { font-family: -apple-system, sans-serif; max-width: 480px; margin: 80px auto; text-align: center; }
+        a.btn { display: inline-block; margin: 12px; padding: 16px 32px; background: #2b6cb0; color: white;
+                border-radius: 8px; text-decoration: none; font-weight: 600; }
+        a.btn.alt { background: #444; }
+    </style>
+</head>
+<body>
+<h1>상담 채팅 데모</h1>
+<p>두 페이지를 각각 다른 탭/브라우저에서 열어보세요.</p>
+<a class="btn" th:href="@{/client}">고객 - 상담요청</a>
+<a class="btn alt" th:href="@{/admin}">상담사 - 관리자</a>
+</body>
+</html>

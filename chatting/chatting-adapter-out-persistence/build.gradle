@@ -1,0 +1,6 @@
+dependencies {
+    implementation project(':chatting:chatting-application')
+    implementation project(':chatting:chatting-domain')
+    api 'org.springframework.boot:spring-boot-starter-data-jpa'
+    runtimeOnly 'com.h2database:h2'
+}
