@@ -8,6 +8,13 @@
         <option name="modules">
           <set>
             <option value="$PROJECT_DIR$" />
+            <option value="$PROJECT_DIR$/agent" />
+            <option value="$PROJECT_DIR$/agent/agent-adapter-in-web" />
+            <option value="$PROJECT_DIR$/agent/agent-adapter-out-file" />
+            <option value="$PROJECT_DIR$/agent/agent-adapter-out-llm" />
+            <option value="$PROJECT_DIR$/agent/agent-application" />
+            <option value="$PROJECT_DIR$/agent/agent-bootstrap" />
+            <option value="$PROJECT_DIR$/agent/agent-domain" />
             <option value="$PROJECT_DIR$/chatting" />
             <option value="$PROJECT_DIR$/chatting/chatting-adapter-in-web" />
             <option value="$PROJECT_DIR$/chatting/chatting-adapter-out-persistence" />

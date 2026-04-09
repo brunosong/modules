@@ -1,0 +1,4 @@
+dependencies {
+    implementation project(':agent:agent-domain')
+    implementation 'org.springframework:spring-context'
+}

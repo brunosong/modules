@@ -1,0 +1,12 @@
+dependencies {
+    implementation project(':agent:agent-domain')
+    implementation project(':agent:agent-application')
+    implementation project(':agent:agent-adapter-in-web')
+    implementation project(':agent:agent-adapter-out-llm')
+    implementation project(':agent:agent-adapter-out-file')
+    implementation 'org.springframework.boot:spring-boot-starter'
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+}
+
+tasks.named('bootJar') { enabled = true }
+tasks.named('jar') { enabled = false }

@@ -1,0 +1,12 @@
+server:
+  port: 8090
+
+spring:
+  application:
+    name: agent
+
+agent:
+  work-dir: ./agent-workspace        # 생성된 파일이 저장될 폴더
+  ollama:
+    base-url: http://localhost:11434 # ollama serve 기본 주소
+    model: llama3.1                  # `ollama pull llama3.1` 후 사용. qwen2.5 등도 가능

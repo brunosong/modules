@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8"/>
+    <title>Local LLM Agent</title>
+    <style>
+        body { font-family: -apple-system, sans-serif; max-width: 720px; margin: 30px auto; padding: 0 16px; }
+        #log { border: 1px solid #ddd; border-radius: 8px; padding: 12px; height: 420px; overflow-y: auto; background: #fafafa; }
+        .me   { color: #1565c0; margin: 6px 0; white-space: pre-wrap; }
+        .bot  { color: #2e7d32; margin: 6px 0; white-space: pre-wrap; }
+        .sys  { color: #888;    margin: 6px 0; font-size: 12px; }
+        #row { display: flex; gap: 8px; margin-top: 12px; }
+        #msg { flex: 1; padding: 10px; font-size: 14px; }
+        button { padding: 10px 16px; }
+    </style>
+</head>
+<body>
+    <h2>🤖 Local LLM Agent (Ollama)</h2>
+    <p class="sys">예: "notes/hello.txt 라는 파일에 hello world 라고 적어줘"</p>
+    <div style="margin-bottom:8px;">
+        <label>모델: </label>
+        <select id="model"><option value="">(loading...)</option></select>
+        <button onclick="loadModels()" type="button">↻</button>
+    </div>
+    <div id="log"></div>
+    <div id="row">
+        <input id="msg" placeholder="에이전트에게 시킬 일을 입력..." />
+        <button onclick="send()">보내기</button>
+    </div>
+
+<script>
+    const log = document.getElementById('log');
+    const msg = document.getElementById('msg');
+    const modelSel = document.getElementById('model');
+
+    async function loadModels() {
+        try {
+            const r = await fetch('/agent/models');
+            const list = await r.json();
+            modelSel.innerHTML = '';
+            if (!list.length) {
+                modelSel.innerHTML = '<option value="">(설치된 모델 없음)</option>';
+                return;
+            }
+            list.forEach(name => {
+                const o = document.createElement('option');
+                o.value = name; o.textContent = name;
+                modelSel.appendChild(o);
+            });
+        } catch (e) {
+            modelSel.innerHTML = '<option value="">(불러오기 실패)</option>';
+        }
+    }
+    loadModels();
+
+    function append(cls, text) {
+        const div = document.createElement('div');
+        div.className = cls;
+        div.textContent = text;
+        log.appendChild(div);
+        log.scrollTop = log.scrollHeight;
+    }
+
+    async function send() {
+        const text = msg.value.trim();
+        if (!text) return;
+        append('me', '🧑 ' + text);
+        msg.value = '';
+        try {
+            const r = await fetch('/agent/chat', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({message: text, model: modelSel.value})
+            });
+            const j = await r.json();
+            append('bot', '🤖 ' + (j.reply || '(빈 응답)'));
+            if (j.saved) append('sys', '📄 saved → ' + j.path);
+        } catch (e) {
+            append('sys', '⚠ ' + e);
+        }
+    }
+
+    msg.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+</script>
+</body>
+</html>
