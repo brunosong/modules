@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF 비전 오버레이 (gemma4)</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Malgun Gothic', sans-serif; background: #f4f6f9; padding: 24px; color: #333; }
+        h1 { text-align: center; margin-bottom: 8px; }
+        .subtitle { text-align: center; color: #666; font-size: 14px; margin-bottom: 24px; }
+        .container { max-width: 900px; margin: 0 auto; }
+        .card { background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .card h2 { margin-bottom: 16px; font-size: 18px; color: #1a73e8; }
+        .btn { display: inline-block; padding: 10px 20px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: bold; }
+        .btn-primary { background: #1a73e8; color: #fff; }
+        .btn-success { background: #34a853; color: #fff; }
+        .btn:hover { opacity: 0.9; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+        .mapping-row { display: flex; gap: 10px; margin-bottom: 8px; align-items: center; }
+        .mapping-row input { flex: 1; padding: 8px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
+        .mapping-row .remove-btn { background: #ea4335; color: #fff; border: none; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+        .add-btn { background: none; border: 1px dashed #1a73e8; color: #1a73e8; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+        .add-btn:hover { background: #e8f0fe; }
+        .preview-area { margin-top: 12px; text-align: center; }
+        .preview-area img { max-width: 100%; border: 1px solid #ddd; border-radius: 8px; }
+        .loading { display: none; text-align: center; padding: 16px; color: #666; }
+        .loading.show { display: block; }
+        .status { margin-top: 12px; padding: 12px; border-radius: 8px; font-size: 14px; display: none; }
+        .status.info { display: block; background: #e8f0fe; color: #1a73e8; }
+        .status.error { display: block; background: #fce8e6; color: #ea4335; }
+        .status.success { display: block; background: #e6f4ea; color: #34a853; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>PDF 비전 오버레이</h1>
+    <p class="subtitle">OCR 없이 gemma4가 이미지를 직접 분석하여 라벨 위치를 찾습니다</p>
+
+    <!-- 파일 업로드 -->
+    <div class="card">
+        <h2>1. PDF 파일 선택</h2>
+        <input type="file" id="pdfFile" accept=".pdf" onchange="previewPage()">
+        <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center;">
+            <label>페이지:</label>
+            <input type="number" id="pageNum" value="0" min="0" style="width:60px; padding:6px; border:1px solid #ccc; border-radius:6px;">
+            <button class="btn btn-primary" onclick="previewPage()">미리보기</button>
+        </div>
+        <div class="preview-area" id="previewArea"></div>
+    </div>
+
+    <!-- 라벨-값 매핑 -->
+    <div class="card">
+        <h2>2. 라벨 - 새 텍스트 매핑</h2>
+        <div id="mappings">
+            <div class="mapping-row">
+                <input type="text" class="label-input" placeholder="라벨 (예: 성명)">
+                <input type="text" class="value-input" placeholder="덮어쓸 값 (예: 홍길동)">
+                <button class="remove-btn" onclick="removeRow(this)">X</button>
+            </div>
+        </div>
+        <button class="add-btn" onclick="addRow()" style="margin-top: 8px;">+ 매핑 추가</button>
+        <div style="margin-top: 16px;">
+            <button class="btn btn-success" id="applyBtn" onclick="applyOverlay()">AI 비전 오버레이 적용</button>
+        </div>
+        <div class="loading" id="loading">AI가 이미지를 분석 중입니다... (시간이 걸릴 수 있습니다)</div>
+        <div class="status" id="status"></div>
+    </div>
+</div>
+
+<script>
+    function previewPage() {
+        const file = document.getElementById('pdfFile').files[0];
+        if (!file) return;
+
+        const page = document.getElementById('pageNum').value;
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('page', page);
+
+        const area = document.getElementById('previewArea');
+        area.innerHTML = '<p>로딩 중...</p>';
+
+        fetch('/pdf-vision/preview', { method: 'POST', body: formData })
+            .then(r => {
+                if (!r.ok) throw new Error('미리보기 실패');
+                return r.blob();
+            })
+            .then(blob => {
+                const url = URL.createObjectURL(blob);
+                area.innerHTML = '<img src="' + url + '" alt="페이지 미리보기">';
+            })
+            .catch(err => {
+                area.innerHTML = '<p style="color:red;">' + err.message + '</p>';
+            });
+    }
+
+    function addRow() {
+        const div = document.createElement('div');
+        div.className = 'mapping-row';
+        div.innerHTML = '<input type="text" class="label-input" placeholder="라벨 (예: 성명)">'
+            + '<input type="text" class="value-input" placeholder="덮어쓸 값 (예: 홍길동)">'
+            + '<button class="remove-btn" onclick="removeRow(this)">X</button>';
+        document.getElementById('mappings').appendChild(div);
+    }
+
+    function removeRow(btn) {
+        const rows = document.querySelectorAll('.mapping-row');
+        if (rows.length > 1) btn.parentElement.remove();
+    }
+
+    function applyOverlay() {
+        const file = document.getElementById('pdfFile').files[0];
+        if (!file) { alert('PDF 파일을 선택하세요.'); return; }
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const labels = document.querySelectorAll('.label-input');
+        const values = document.querySelectorAll('.value-input');
+        let hasMapping = false;
+
+        labels.forEach((el, i) => {
+            if (el.value.trim() && values[i].value.trim()) {
+                formData.append('labels', el.value.trim());
+                formData.append('values', values[i].value.trim());
+                hasMapping = true;
+            }
+        });
+
+        if (!hasMapping) { alert('최소 하나의 라벨-값 매핑을 입력하세요.'); return; }
+
+        const loading = document.getElementById('loading');
+        const status = document.getElementById('status');
+        const btn = document.getElementById('applyBtn');
+
+        loading.classList.add('show');
+        status.className = 'status';
+        status.style.display = 'none';
+        btn.disabled = true;
+
+        fetch('/pdf-vision/apply', { method: 'POST', body: formData })
+            .then(r => {
+                if (!r.ok) throw new Error('서버 오류: ' + r.status);
+                return r.blob();
+            })
+            .then(blob => {
+                loading.classList.remove('show');
+                btn.disabled = false;
+
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'vision_' + file.name;
+                a.click();
+                URL.revokeObjectURL(url);
+
+                status.className = 'status success';
+                status.textContent = 'PDF 생성 완료! 다운로드가 시작됩니다.';
+            })
+            .catch(err => {
+                loading.classList.remove('show');
+                btn.disabled = false;
+                status.className = 'status error';
+                status.textContent = '오류: ' + err.message;
+            });
+    }
+</script>
+</body>
+</html>

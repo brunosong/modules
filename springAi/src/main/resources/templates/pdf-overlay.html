@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF 좌표 추출 & 텍스트 오버레이</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Malgun Gothic', sans-serif; background: #f4f6f9; padding: 24px; color: #333; }
+        h1 { text-align: center; margin-bottom: 24px; }
+        .container { max-width: 900px; margin: 0 auto; }
+
+        .card { background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .card h2 { margin-bottom: 16px; font-size: 18px; color: #1a73e8; }
+
+        label { display: block; font-weight: bold; margin-bottom: 6px; font-size: 14px; }
+        input[type="file"] { margin-bottom: 16px; }
+
+        .btn { display: inline-block; padding: 10px 20px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: bold; }
+        .btn-primary { background: #1a73e8; color: #fff; }
+        .btn-success { background: #34a853; color: #fff; }
+        .btn:hover { opacity: 0.9; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+
+        /* 좌표 결과 테이블 */
+        .positions-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+        .positions-table th, .positions-table td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; }
+        .positions-table th { background: #f0f4ff; }
+        .positions-table tr:hover { background: #fffde7; }
+
+        /* 오버레이 매핑 */
+        .mapping-row { display: flex; gap: 10px; margin-bottom: 8px; align-items: center; }
+        .mapping-row input { flex: 1; padding: 8px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
+        .mapping-row .remove-btn { background: #ea4335; color: #fff; border: none; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+
+        .add-btn { background: none; border: 1px dashed #1a73e8; color: #1a73e8; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+        .add-btn:hover { background: #e8f0fe; }
+
+        .loading { display: none; text-align: center; padding: 16px; color: #666; }
+        .loading.show { display: block; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>PDF 좌표 추출 & 텍스트 오버레이</h1>
+
+    <!-- 파일 업로드 -->
+    <div class="card">
+        <h2>1. PDF 파일 선택</h2>
+        <input type="file" id="pdfFile" accept=".pdf">
+        <div style="margin-top: 8px; display: flex; gap: 8px;">
+            <button class="btn btn-primary" onclick="extractPositions()">좌표 추출</button>
+            <button class="btn" style="background:#ff6d01;color:#fff;" onclick="downloadDebug()">좌표 디버그 PDF 다운로드</button>
+        </div>
+    </div>
+
+    <!-- 좌표 결과 -->
+    <div class="card" id="positionsCard" style="display:none;">
+        <h2>2. 추출된 텍스트 좌표</h2>
+        <p style="font-size:13px; color:#666; margin-bottom:8px;">텍스트를 클릭하면 라벨로 추가됩니다.</p>
+        <div class="loading" id="positionsLoading">추출 중...</div>
+        <div id="positionsResult"></div>
+    </div>
+
+    <!-- 오버레이 매핑 -->
+    <div class="card">
+        <h2>3. 라벨 → 새 텍스트 매핑</h2>
+        <div id="mappings">
+            <div class="mapping-row">
+                <input type="text" class="label-input" placeholder="라벨 (예: 이름)">
+                <input type="text" class="value-input" placeholder="덮어쓸 값 (예: 홍길동)">
+                <button class="remove-btn" onclick="removeRow(this)">X</button>
+            </div>
+        </div>
+        <button class="add-btn" onclick="addRow()" style="margin-top: 8px;">+ 매핑 추가</button>
+        <div style="margin-top: 16px;">
+            <button class="btn btn-success" onclick="applyOverlay()">오버레이 적용 & 다운로드</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    function extractPositions() {
+        const file = document.getElementById('pdfFile').files[0];
+        if (!file) { alert('PDF 파일을 선택하세요.'); return; }
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const card = document.getElementById('positionsCard');
+        const loading = document.getElementById('positionsLoading');
+        const result = document.getElementById('positionsResult');
+
+        card.style.display = 'block';
+        loading.classList.add('show');
+        result.innerHTML = '';
+
+        fetch('/pdf-overlay/positions', { method: 'POST', body: formData })
+            .then(r => r.json())
+            .then(data => {
+                loading.classList.remove('show');
+                if (!data.success) {
+                    result.innerHTML = '<p style="color:red;">오류: ' + data.error + '</p>';
+                    return;
+                }
+                renderPositions(data.positions);
+            })
+            .catch(err => {
+                loading.classList.remove('show');
+                result.innerHTML = '<p style="color:red;">요청 실패: ' + err.message + '</p>';
+            });
+    }
+
+    function renderPositions(positions) {
+        const result = document.getElementById('positionsResult');
+        if (positions.length === 0) {
+            result.innerHTML = '<p>추출된 텍스트가 없습니다.</p>';
+            return;
+        }
+
+        let html = '<table class="positions-table"><thead><tr>'
+            + '<th>페이지</th><th>X</th><th>Y</th><th>너비</th><th>높이</th><th>폰트</th><th>텍스트</th>'
+            + '</tr></thead><tbody>';
+
+        positions.forEach(p => {
+            html += '<tr style="cursor:pointer;" onclick="addLabelFromPosition(\'' + escapeHtml(p.text) + '\')">'
+                + '<td>' + (p.page + 1) + '</td>'
+                + '<td>' + p.x.toFixed(1) + '</td>'
+                + '<td>' + p.y.toFixed(1) + '</td>'
+                + '<td>' + p.width.toFixed(1) + '</td>'
+                + '<td>' + p.height.toFixed(1) + '</td>'
+                + '<td>' + p.fontSize.toFixed(1) + '</td>'
+                + '<td>' + escapeHtml(p.text) + '</td>'
+                + '</tr>';
+        });
+
+        html += '</tbody></table>';
+        result.innerHTML = html;
+    }
+
+    function escapeHtml(str) {
+        return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                  .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    }
+
+    function addLabelFromPosition(text) {
+        // 빈 라벨 입력 필드가 있으면 거기에 넣고, 없으면 새 행 추가
+        const inputs = document.querySelectorAll('.label-input');
+        for (const input of inputs) {
+            if (input.value === '') {
+                input.value = text;
+                input.nextElementSibling.focus();
+                return;
+            }
+        }
+        addRow();
+        const newInputs = document.querySelectorAll('.label-input');
+        newInputs[newInputs.length - 1].value = text;
+        newInputs[newInputs.length - 1].nextElementSibling.focus();
+    }
+
+    function addRow() {
+        const div = document.createElement('div');
+        div.className = 'mapping-row';
+        div.innerHTML = '<input type="text" class="label-input" placeholder="라벨 (예: 이름)">'
+            + '<input type="text" class="value-input" placeholder="덮어쓸 값 (예: 홍길동)">'
+            + '<button class="remove-btn" onclick="removeRow(this)">X</button>';
+        document.getElementById('mappings').appendChild(div);
+    }
+
+    function removeRow(btn) {
+        const rows = document.querySelectorAll('.mapping-row');
+        if (rows.length > 1) btn.parentElement.remove();
+    }
+
+    function applyOverlay() {
+        const file = document.getElementById('pdfFile').files[0];
+        if (!file) { alert('PDF 파일을 선택하세요.'); return; }
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const labels = document.querySelectorAll('.label-input');
+        const values = document.querySelectorAll('.value-input');
+        let hasMapping = false;
+
+        labels.forEach((el, i) => {
+            if (el.value.trim() && values[i].value.trim()) {
+                formData.append('labels', el.value.trim());
+                formData.append('values', values[i].value.trim());
+                hasMapping = true;
+            }
+        });
+
+        if (!hasMapping) { alert('최소 하나의 라벨-값 매핑을 입력하세요.'); return; }
+
+        fetch('/pdf-overlay/apply', { method: 'POST', body: formData })
+            .then(r => {
+                if (!r.ok) throw new Error('서버 오류: ' + r.status);
+                return r.blob();
+            })
+            .then(blob => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'overlay_' + file.name;
+                a.click();
+                URL.revokeObjectURL(url);
+            })
+            .catch(err => alert('오버레이 실패: ' + err.message));
+    }
+
+    function downloadDebug() {
+        const file = document.getElementById('pdfFile').files[0];
+        if (!file) { alert('PDF 파일을 선택하세요.'); return; }
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        fetch('/pdf-overlay/debug', { method: 'POST', body: formData })
+            .then(r => {
+                if (!r.ok) throw new Error('서버 오류: ' + r.status);
+                return r.blob();
+            })
+            .then(blob => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'debug_coordinates.pdf';
+                a.click();
+                URL.revokeObjectURL(url);
+            })
+            .catch(err => alert('디버그 PDF 생성 실패: ' + err.message));
+    }
+</script>
+</body>
+</html>
