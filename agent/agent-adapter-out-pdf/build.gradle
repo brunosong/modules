@@ -1,0 +1,4 @@
+dependencies {
+    implementation 'org.apache.pdfbox:pdfbox:3.0.4'
+    implementation 'org.springframework.ai:spring-ai-model:1.0.0'
+}

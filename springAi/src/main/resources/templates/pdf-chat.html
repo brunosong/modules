@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF AI 분석</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { text-align: center; margin-bottom: 24px; color: #333; }
+
+        .upload-area {
+            background: #fff; border: 2px dashed #ccc; border-radius: 12px;
+            padding: 32px; text-align: center; margin-bottom: 16px;
+            transition: border-color 0.2s;
+        }
+        .upload-area.dragover { border-color: #4a90d9; background: #f0f7ff; }
+        .upload-area p { color: #666; margin-bottom: 12px; }
+
+        .file-info { background: #e8f5e9; padding: 8px 16px; border-radius: 8px;
+                     margin-bottom: 16px; display: none; color: #2e7d32; }
+
+        .question-area {
+            display: flex; gap: 8px; margin-bottom: 16px;
+        }
+        .question-area input {
+            flex: 1; padding: 12px 16px; border: 1px solid #ddd; border-radius: 8px;
+            font-size: 14px;
+        }
+        .btn {
+            padding: 12px 24px; background: #4a90d9; color: #fff; border: none;
+            border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;
+            transition: background 0.2s;
+        }
+        .btn:hover { background: #357abd; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+
+        .result-card {
+            background: #fff; border-radius: 12px; padding: 24px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08); display: none;
+        }
+        .result-card .meta { color: #888; font-size: 13px; margin-bottom: 12px; }
+        .result-card .reply { line-height: 1.7; white-space: pre-wrap; color: #333; }
+
+        .spinner {
+            display: none; text-align: center; padding: 32px; color: #666;
+        }
+        .spinner::after {
+            content: ''; display: inline-block; width: 24px; height: 24px;
+            border: 3px solid #ddd; border-top-color: #4a90d9; border-radius: 50%;
+            animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 8px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>PDF AI 분석</h1>
+
+    <div class="upload-area" id="dropZone">
+        <p>PDF 파일을 드래그하거나 클릭하여 선택하세요</p>
+        <input type="file" id="fileInput" accept=".pdf" style="display:none">
+        <button class="btn" onclick="document.getElementById('fileInput').click()">파일 선택</button>
+    </div>
+
+    <div class="file-info" id="fileInfo"></div>
+
+    <div class="question-area">
+        <input type="text" id="question" placeholder="질문을 입력하세요 (기본: 문서 요약)">
+        <button class="btn" id="analyzeBtn" onclick="analyze()" disabled>분석하기</button>
+    </div>
+
+    <div class="spinner" id="spinner">AI가 분석 중입니다...</div>
+
+    <div class="result-card" id="result">
+        <div class="meta" id="resultMeta"></div>
+        <div class="reply" id="resultReply"></div>
+    </div>
+</div>
+
+<script>
+    let selectedFile = null;
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const fileInfo = document.getElementById('fileInfo');
+    const analyzeBtn = document.getElementById('analyzeBtn');
+
+    // 드래그 앤 드롭
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        const file = e.dataTransfer.files[0];
+        if (file && file.type === 'application/pdf') selectFile(file);
+    });
+    dropZone.addEventListener('click', e => {
+        if (e.target.tagName !== 'BUTTON') fileInput.click();
+    });
+    fileInput.addEventListener('change', () => {
+        if (fileInput.files[0]) selectFile(fileInput.files[0]);
+    });
+
+    function selectFile(file) {
+        selectedFile = file;
+        const sizeMB = (file.size / 1024 / 1024).toFixed(2);
+        fileInfo.textContent = `선택된 파일: ${file.name} (${sizeMB} MB)`;
+        fileInfo.style.display = 'block';
+        analyzeBtn.disabled = false;
+    }
+
+    async function analyze() {
+        if (!selectedFile) return;
+
+        const question = document.getElementById('question').value;
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+        if (question) formData.append('question', question);
+
+        analyzeBtn.disabled = true;
+        document.getElementById('spinner').style.display = 'block';
+        document.getElementById('result').style.display = 'none';
+
+        try {
+            const res = await fetch('/pdf/analyze', { method: 'POST', body: formData });
+            const data = await res.json();
+
+            if (data.success) {
+                document.getElementById('resultMeta').textContent =
+                    `파일: ${data.fileName} | 페이지: ${data.pageCount} | 글자수: ${data.charCount}`;
+            } else {
+                document.getElementById('resultMeta').textContent = '분석 실패';
+            }
+            document.getElementById('resultReply').textContent = data.reply;
+            document.getElementById('result').style.display = 'block';
+        } catch (e) {
+            document.getElementById('resultMeta').textContent = '오류 발생';
+            document.getElementById('resultReply').textContent = e.message;
+            document.getElementById('result').style.display = 'block';
+        } finally {
+            document.getElementById('spinner').style.display = 'none';
+            analyzeBtn.disabled = false;
+        }
+    }
+</script>
+</body>
+</html>

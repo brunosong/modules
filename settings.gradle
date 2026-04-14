@@ -11,4 +11,7 @@ include 'agent:agent-application'
 include 'agent:agent-adapter-in-web'
 include 'agent:agent-adapter-out-llm'
 include 'agent:agent-adapter-out-file'
+include 'agent:agent-adapter-out-pdf'
 include 'agent:agent-bootstrap'
+
+include 'springAi'

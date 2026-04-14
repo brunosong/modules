@@ -1,5 +1,7 @@
 dependencies {
     implementation project(':agent:agent-domain')
     implementation project(':agent:agent-application')
-    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.ai:spring-ai-starter-model-ollama'
+
+    implementation platform('org.springframework.ai:spring-ai-bom:1.0.0')
 }

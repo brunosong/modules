@@ -1,0 +1,19 @@
+server:
+  port: 8091
+
+spring:
+  application:
+    name: spring-ai
+  servlet:
+    multipart:
+      maxFileSize: 10MB # 파일 하나의 최대 크기
+      maxRequestSize: 30MB  # 한 번에 최대 업로드 가능 용량
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        model: gemma4
+
+tesseract:
+  data-path: C:/Program Files/Tesseract-OCR/tessdata
+  language: kor+eng
