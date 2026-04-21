@@ -7,13 +7,17 @@ spring:
 
   flyway:
     enabled: true
-    # 도메인별 디렉토리를 모두 스캔
     locations:
       - classpath:db/migration/common
       - classpath:db/migration/chatting
       - classpath:db/migration/agent
+    # 기존 DB에 Flyway 최초 도입 시 baseline 자동 생성
     baseline-on-migrate: true
-    # flyway_schema_history 테이블에 모든 이력이 남음
-    table: flyway_schema_history
-    # 검증 실패 시 즉시 알림 (PR 리뷰에서 놓친 문제 캐치)
+    # 이미 적용된 SQL 파일 변경 감지 — 반드시 true
     validate-on-migrate: true
+    # 여러 팀이 동시 작업 시 타임스탬프 역전 허용
+    out-of-order: true
+    # DB 전체 삭제 방지 — 절대 false로 바꾸지 말 것
+    clean-disabled: true
+    # Docker 환경에서 DB 기동 대기
+    connect-retries: 3
