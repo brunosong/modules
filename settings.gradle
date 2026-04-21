@@ -15,3 +15,5 @@ include 'agent:agent-adapter-out-pdf'
 include 'agent:agent-bootstrap'
 
 include 'springAi'
+
+include 'flyway'
