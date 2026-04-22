@@ -1,0 +1,16 @@
+group = 'com.brunosong'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+// 이 모듈은 Spring Boot 실행 가능한 앱으로 동작
+tasks.named('bootJar') { enabled = true }
+tasks.named('jar') { enabled = false }
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    implementation 'org.liquibase:liquibase-core'
+    runtimeOnly 'com.mysql:mysql-connector-j'
+}

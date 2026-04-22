@@ -17,3 +17,5 @@ include 'agent:agent-bootstrap'
 include 'springAi'
 
 include 'flyway'
+
+include 'liquibase'

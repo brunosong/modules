@@ -1,0 +1,49 @@
+databaseChangeLog:
+  - changeSet:
+      id: 202604210003-create-chat-message
+      author: brunosong
+      comment: 채팅 메시지 테이블 생성
+      changes:
+        - createTable:
+            tableName: chat_message
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: room_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: sender_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: content
+                  type: TEXT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: DATETIME
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+        - createIndex:
+            tableName: chat_message
+            indexName: idx_chat_message_room_id
+            columns:
+              - column:
+                  name: room_id
+        - createIndex:
+            tableName: chat_message
+            indexName: idx_chat_message_sender_id
+            columns:
+              - column:
+                  name: sender_id

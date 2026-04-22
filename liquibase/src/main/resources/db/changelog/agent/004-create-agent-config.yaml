@@ -1,0 +1,52 @@
+databaseChangeLog:
+  - changeSet:
+      id: 202604210004-create-agent-config
+      author: brunosong
+      comment: AI 에이전트 설정 테이블 생성
+      changes:
+        - createTable:
+            tableName: agent_config
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: name
+                  type: VARCHAR(200)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: model_type
+                  type: VARCHAR(50)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: system_prompt
+                  type: TEXT
+              - column:
+                  name: owner_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: DATETIME
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: DATETIME
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+        - createIndex:
+            tableName: agent_config
+            indexName: idx_agent_config_owner_id
+            columns:
+              - column:
+                  name: owner_id

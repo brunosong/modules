@@ -1,0 +1,12 @@
+services:
+  bytebase:
+    image: bytebase/bytebase:3.16.0
+    container_name: modules-bytebase
+    ports:
+      - "8080:8080"
+    volumes:
+      - bytebase-data:/var/bytebase
+    command: --data /var/bytebase --port 8080
+
+volumes:
+  bytebase-data:

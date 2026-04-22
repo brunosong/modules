@@ -1,0 +1,9 @@
+databaseChangeLog:
+  - include:
+      file: db/changelog/common/001-create-users.yaml
+  - include:
+      file: db/changelog/chatting/002-create-chat-room.yaml
+  - include:
+      file: db/changelog/chatting/003-create-chat-message.yaml
+  - include:
+      file: db/changelog/agent/004-create-agent-config.yaml
