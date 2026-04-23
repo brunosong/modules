@@ -1,139 +1,135 @@
-# Jenkins + Kubernetes Job DB 마이그레이션 가이드
+# Jenkins + Kubernetes Job DB 마이그레이션 가이드 (NCP DB)
 
-로컬 환경에서 Jenkins와 Docker를 이용해 Kubernetes(Kind) 클러스터에 DB 마이그레이션 Job을 실행하는 방법을 설명한다.
+Jenkins에서 Docker 이미지를 빌드하고, K8s 클러스터에 Job을 생성하여
+**클러스터 외부의 DB**(NCP Cloud DB for MySQL)에 Flyway 마이그레이션을 실행하는 방법을 설명한다.
+
+로컬에서는 docker-compose로 MySQL을 별도로 띄워서 NCP Cloud DB를 시뮬레이션한다.
 
 ## 전체 아키텍처
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Docker Host (로컬 PC)                                    │
-│                                                         │
-│  ┌──────────┐    ┌───────────┐    ┌───────────────────┐ │
-│  │ Jenkins  │───▶│Docker DinD│───▶│  Kind Cluster     │ │
-│  │ :8080    │    │ :2376     │    │  ┌─────────────┐  │ │
-│  └──────────┘    └───────────┘    │  │MySQL (K8s)  │  │ │
-│                                   │  │ database NS │  │ │
-│                                   │  └──────┬──────┘  │ │
-│                                   │         │         │ │
-│                                   │  ┌──────▼──────┐  │ │
-│                                   │  │Migration Job│  │ │
-│                                   │  │ default NS  │  │ │
-│                                   │  └─────────────┘  │ │
-│                                   └───────────────────┘ │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────┐     ┌──────────────────────────┐
+│  K8s 클러스터 (Kind / NKS)       │     │  클러스터 외부             │
+│                                 │     │                          │
+│  ┌───────────────────────────┐  │     │  ┌────────────────────┐  │
+│  │ Migration Job (Pod)       │  │     │  │ MySQL              │  │
+│  │  - Flyway 마이그레이션 실행  │──┼────▶│  │ (docker-compose)   │  │
+│  │  - 완료 후 자동 종료        │  │     │  │ 또는 NCP Cloud DB  │  │
+│  └───────────────────────────┘  │     │  │ :3308              │  │
+│                                 │     │  └────────────────────┘  │
+│  ┌───────────────────────────┐  │     │                          │
+│  │ Secret (db-migration-secret)│ │     │  ┌────────────────────┐  │
+│  │  DB_HOST, DB_PORT, ...    │  │     │  │ Jenkins            │  │
+│  └───────────────────────────┘  │     │  │ (docker-compose)   │  │
+│                                 │     │  │ :8080              │  │
+└─────────────────────────────────┘     │  └────────────────────┘  │
+                                        └──────────────────────────┘
 ```
 
-## 사전 준비
-
-### 1. 필수 설치 도구
-
-| 도구 | 설치 방법 | 확인 명령 |
-|------|----------|----------|
-| Docker Desktop | https://docs.docker.com/desktop/install/windows-install/ | `docker --version` |
-| Kind | `choco install kind` 또는 https://kind.sigs.k8s.io/docs/user/quick-start/#installation | `kind --version` |
-| kubectl | `choco install kubernetes-cli` 또는 Docker Desktop 설정에서 활성화 | `kubectl version --client` |
-| Java 21 | https://adoptium.net/ | `java --version` |
-
-> **Windows 기준**: Chocolatey(`choco`)가 없으면 https://chocolatey.org/install 에서 설치
-
-### 2. Docker Desktop 설정
-
-- Settings → General → **"Use the WSL 2 based engine"** 체크
-- Settings → Resources → WSL Integration → 사용할 WSL 배포판 활성화
+**핵심**: MySQL은 K8s 클러스터 안에 없다. 완전히 분리된 외부 DB이다.
 
 ---
 
-## Step 1: Kind 클러스터 생성
+## 파일 구성
+
+```
+jenkins-k8s-job/
+├── docker-compose.yml        # Jenkins + Docker-in-Docker
+├── docker-compose-db.yml     # MySQL (클러스터 외부 DB - NCP Cloud DB 역할)
+├── jenkins/
+│   └── Dockerfile            # 커스텀 Jenkins 이미지 (kubectl, kind 포함)
+├── generate-kubeconfig.ps1   # Jenkins용 kubeconfig 생성 스크립트
+├── kind-config.yml           # Kind 클러스터 설정
+├── Dockerfile                # 마이그레이션 앱 컨테이너 이미지
+├── Jenkinsfile               # Jenkins 파이프라인
+├── jenkins-plugins.txt       # Jenkins 플러그인 목록
+├── build.gradle
+├── k8s/
+│   ├── db-secret.yml         # DB 접속 정보 (호스트/포트/계정)
+│   ├── ncp-db-service.yml    # 외부 DB 연결 Service (ExternalName / Endpoints)
+│   └── migration-job.yml     # Flyway 마이그레이션 K8s Job
+└── src/
+    └── main/
+        ├── java/...          # Spring Boot + Flyway 앱
+        └── resources/
+            ├── application.yml
+            └── db/migration/ # SQL 마이그레이션 파일
+```
+
+---
+
+## Step 1: 외부 MySQL 실행 (NCP Cloud DB 시뮬레이션)
 
 ```bash
 cd db-migration/jenkins-k8s-job
 
+# 클러스터 밖에 MySQL 띄우기
+docker compose -f docker-compose-db.yml up -d
+
+# 접속 확인
+docker exec -it ncp-cloud-db mysql -umigration -pmigration1234 modules_db -e "SELECT 1;"
+```
+
+이 MySQL은 K8s 클러스터와 완전히 분리되어 있다.
+운영 환경에서는 이 자리에 NCP Cloud DB for MySQL이 들어간다.
+
+| 구분 | 로컬 | 운영 (NCP) |
+|------|------|-----------|
+| DB | docker-compose-db.yml | NCP Cloud DB for MySQL |
+| Host | `host.docker.internal` | `xxx.cdb.ntruss.com` |
+| Port | 3308 | 3306 |
+| User | migration | migration |
+
+---
+
+## Step 2: Kind 클러스터 생성
+
+```bash
 # Kind 클러스터 생성
 kind create cluster --config kind-config.yml
 
-# 클러스터 확인
-kubectl cluster-info --context kind-db-migration
+# 확인
 kubectl get nodes
 ```
 
-**결과 확인:**
-```
-NAME                         STATUS   ROLES           AGE   VERSION
-db-migration-control-plane   Ready    control-plane   30s   v1.31.0
-```
-
 ---
 
-## Step 2: K8s에 MySQL 배포
+## Step 3: 앱 빌드 & 이미지 준비
 
 ```bash
-# MySQL 배포 (database 네임스페이스에 생성)
-kubectl apply -f k8s/mysql-deployment.yml
-
-# 배포 상태 확인 (Ready 될 때까지 대기)
-kubectl -n database rollout status deployment/mysql --timeout=120s
-
-# Pod 상태 확인
-kubectl -n database get pods
-
-# MySQL 접속 테스트
-kubectl -n database exec -it deploy/mysql -- mysql -uroot -proot -e "SHOW DATABASES;"
-```
-
-**결과 확인:**
-```
-NAME                     READY   STATUS    RESTARTS   AGE
-mysql-xxxxxxxxxx-xxxxx   1/1     Running   0          30s
-```
-
----
-
-## Step 3: Flyway 마이그레이션 앱 빌드
-
-```bash
-# 프로젝트 루트에서 bootJar 빌드
+# 프로젝트 루트로 이동
 cd ../../
+
+# bootJar 빌드
 ./gradlew :db-migration:jenkins-k8s-job:bootJar
 
-# 빌드 확인
-ls db-migration/jenkins-k8s-job/build/libs/
-# → jenkins-k8s-job-1.0-SNAPSHOT.jar
-```
-
----
-
-## Step 4: Docker 이미지 빌드 & Kind에 로드
-
-```bash
-cd db-migration/jenkins-k8s-job
-
 # Docker 이미지 빌드
+cd db-migration/jenkins-k8s-job
 docker build -t db-migration:v1 .
 
-# Kind 클러스터에 이미지 로드 (DockerHub push 없이 직접 전달)
+# Kind 클러스터에 이미지 로드 (레지스트리 없이 직접 전달)
 kind load docker-image db-migration:v1 --name db-migration
-
-# 이미지 로드 확인
-docker exec -it db-migration-control-plane crictl images | grep db-migration
 ```
-
-> **핵심 포인트**: `kind load`를 사용하면 로컬 이미지를 레지스트리 없이 바로 클러스터에 전달할 수 있다.
 
 ---
 
-## Step 5: Secret 생성 & 마이그레이션 Job 실행
+## Step 4: K8s 리소스 배포 & 마이그레이션 실행
 
 ```bash
-# DB 접속 정보 Secret 생성
+# 1. DB 접속 정보 Secret 생성
 kubectl apply -f k8s/db-secret.yml
 
-# 마이그레이션 Job의 이미지 태그를 수정하여 실행
-sed "s|brunosong/db-migration:latest|db-migration:v1|g" k8s/migration-job.yml | kubectl apply -f -
+# 2. (선택) 외부 DB Service 매핑
+kubectl apply -f k8s/ncp-db-service.yml
 
-# Job 완료 대기
+# 3. 마이그레이션 Job 실행
+sed "s|brunosong/db-migration:latest|db-migration:v1|g" \
+    k8s/migration-job.yml | kubectl apply -f -
+
+# 4. 완료 대기
 kubectl wait --for=condition=complete job/db-migration-job --timeout=300s
 
-# 실행 로그 확인
+# 5. 로그 확인
 kubectl logs job/db-migration-job
 ```
 
@@ -142,134 +138,170 @@ kubectl logs job/db-migration-job
 Flyway Community Edition ...
 Successfully validated 1 migration
 Creating Schema History table ...
-Current version of schema `modules_db`: << Empty Schema >>
 Migrating schema `modules_db` to version "1 - create sample table"
 Successfully applied 1 migration
 ```
 
 ---
 
-## Step 6: 마이그레이션 결과 검증
+## Step 5: 결과 검증
+
+외부 MySQL에 직접 접속하여 확인한다.
 
 ```bash
-# MySQL에 접속하여 테이블 확인
-kubectl -n database exec -it deploy/mysql -- mysql -uroot -proot modules_db -e "SHOW TABLES;"
+# docker-compose MySQL에 접속
+docker exec -it ncp-cloud-db mysql -umigration -pmigration1234 modules_db
 
-# Flyway 히스토리 확인
-kubectl -n database exec -it deploy/mysql -- mysql -uroot -proot modules_db -e "SELECT * FROM flyway_schema_history;"
-
-# 생성된 테이블 구조 확인
-kubectl -n database exec -it deploy/mysql -- mysql -uroot -proot modules_db -e "DESC sample_k8s_job;"
+# 테이블 확인
+SHOW TABLES;
+SELECT * FROM flyway_schema_history;
+DESC sample_k8s_job;
 ```
 
 ---
 
-## (선택) Jenkins를 통한 자동화 실행
+## db-secret.yml 환경별 설정
 
-Jenkins를 Docker로 띄워서 파이프라인으로 위 과정을 자동화할 수 있다.
+로컬과 운영 환경에서 `db-secret.yml`의 값만 바꾸면 된다.
+
+### 로컬 (Kind + docker-compose-db.yml)
+
+```yaml
+stringData:
+  DB_HOST: "host.docker.internal"
+  DB_PORT: "3308"
+  DB_NAME: "modules_db"
+  DB_USERNAME: "migration"
+  DB_PASSWORD: "migration1234"
+```
+
+### 운영 (NKS + NCP Cloud DB)
+
+```yaml
+stringData:
+  DB_HOST: "db-migration-mysql.cdb.ntruss.com"
+  DB_PORT: "3306"
+  DB_NAME: "modules_db"
+  DB_USERNAME: "migration"
+  DB_PASSWORD: "실제비밀번호"
+```
+
+---
+
+## (선택) Jenkins 파이프라인 자동화
 
 ### Jenkins 실행
 
+> **중요한 순서**: `docker compose up` **전에** 반드시 `kubeconfig` 파일을 먼저 생성해야 한다.
+> 파일이 없는 상태에서 compose를 실행하면 Docker가 호스트 쪽에 빈 디렉토리를 만들어 버려서
+> 나중에 마운트 에러(`Are you trying to mount a directory onto a file`)가 발생한다.
+
 ```bash
-cd db-migration/jenkins-k8s-job
+# 1. Kind 클러스터 생성
+kind create cluster --config kind-config.yml
 
-# Jenkins + DinD 실행
-docker compose up -d jenkins docker-dind
+# 2. kubeconfig 파일 먼저 생성 (PowerShell)
+.\generate-kubeconfig.ps1
 
-# Jenkins 초기 비밀번호 확인
+# 3. 이제 Jenkins + DinD 실행
+docker compose up -d --build
+
+# 4. 초기 비밀번호 확인
 docker exec jenkins-k8s cat /var/jenkins_home/secrets/initialAdminPassword
 ```
 
 ### Jenkins 초기 설정
 
-1. 브라우저에서 `http://localhost:8080` 접속
-2. 초기 비밀번호 입력
-3. **"Install suggested plugins"** 선택
-4. 관리자 계정 생성
+1. `http://localhost:8080` 접속 → 비밀번호 입력
+2. **Install suggested plugins** 선택
+3. 관리자 계정 생성
 
-### Jenkins에 Kind & kubectl 설치
+### kubectl / Kind 확인
 
-Jenkins 컨테이너 안에 Kind와 kubectl을 설치해야 한다.
+커스텀 Jenkins 이미지(`jenkins/Dockerfile`)에 kubectl과 Kind가 이미 포함되어 있다.
+`docker compose up -d` 시 자동으로 빌드된다.
 
 ```bash
-# Jenkins 컨테이너 접속
-docker exec -it -u root jenkins-k8s bash
-
-# kubectl 설치
-curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-chmod +x kubectl
-mv kubectl /usr/local/bin/
-
-# Kind 설치
-curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64
-chmod +x kind
-mv kind /usr/local/bin/
-
 # 설치 확인
-kubectl version --client
-kind --version
-
-exit
+docker exec jenkins-k8s kubectl version --client
+docker exec jenkins-k8s kind --version
 ```
 
-### Jenkins Pipeline Job 생성
+### kubeconfig 설정
 
-1. **새로운 Item** → **Pipeline** 선택
-2. Pipeline 설정:
-   - **Definition**: Pipeline script from SCM
-   - **SCM**: Git
-   - **Repository URL**: 프로젝트 Git URL
-   - **Script Path**: `db-migration/jenkins-k8s-job/Jenkinsfile`
-3. **저장** → **Build Now**
+호스트의 `~/.kube/config`를 직접 마운트하면 안 된다.
+Kind kubeconfig의 API Server 주소가 `127.0.0.1`인데,
+Jenkins 컨테이너 안에서 `127.0.0.1`은 컨테이너 자기 자신을 가리키기 때문이다.
 
-### Jenkins에서 kubeconfig 설정
-
-Jenkins가 Kind 클러스터에 접근하려면 kubeconfig가 필요하다.
+대신 **Jenkins 전용 kubeconfig 파일**을 별도로 생성한다.
+`generate-kubeconfig.ps1`가 Kind kubeconfig를 추출하고 서버 주소만 `host.docker.internal`로 변경한다.
 
 ```bash
-# 호스트에서 Kind kubeconfig 추출
-kind get kubeconfig --name db-migration > kubeconfig.yml
+# Kind 클러스터 생성 후 (Step 2 완료 상태에서)
+generate-kubeconfig.ps1
 
-# Jenkins 컨테이너로 복사
-docker cp kubeconfig.yml jenkins-k8s:/var/jenkins_home/.kube/config
+# Jenkins에서 클러스터 접근 확인
+docker exec jenkins-k8s kubectl get nodes
 ```
 
-또는 Jenkins Credentials에 등록:
-1. **Jenkins 관리** → **Credentials** → **Global**
-2. **Add Credentials** → **Secret file**
-3. ID: `kubeconfig`, File: kubeconfig.yml 업로드
+> **원리:**
+> - `generate-kubeconfig.ps1` → Kind kubeconfig를 `kubeconfig` 파일로 추출
+> - `127.0.0.1` → `host.docker.internal`로 치환 (호스트 `~/.kube/config`는 안 건드림)
+> - docker-compose가 이 파일을 Jenkins 컨테이너에 읽기전용 마운트
+
+> **운영 환경(NKS)에서는** 볼륨 마운트가 아닌 `set-cluster` 방식으로 클러스터에 접근한다:
+>
+> ```bash
+> # 클러스터 등록
+> kubectl config set-cluster <클러스터명> \
+>     --server=https://<API-Server-주소>:<포트> \
+>     --certificate-authority=/path/to/ca.crt \
+>     --embed-certs=true
+>
+> # 사용자 인증 정보 등록
+> kubectl config set-credentials <사용자명> \
+>     --client-certificate=/path/to/client.crt \
+>     --client-key=/path/to/client.key \
+>     --embed-certs=true
+>
+> # 컨텍스트 등록 & 사용
+> kubectl config set-context <컨텍스트명> \
+>     --cluster=<클러스터명> --user=<사용자명>
+> kubectl config use-context <컨텍스트명>
+> ```
+
+### Pipeline Job 생성
+
+1. 새로운 Item → Pipeline
+2. Definition: Pipeline script from SCM
+3. SCM: Git → Repository URL 입력
+4. Script Path: `db-migration/jenkins-k8s-job/Jenkinsfile`
+5. 저장 → Build Now
 
 ---
 
-## 자주 쓰는 명령어 모음
+## 자주 쓰는 명령어
 
 ```bash
-# ─── Kind 클러스터 관리 ───
-kind create cluster --config kind-config.yml     # 클러스터 생성
-kind delete cluster --name db-migration           # 클러스터 삭제
-kind get clusters                                 # 클러스터 목록
+# ─── 외부 MySQL ───
+docker compose -f docker-compose-db.yml up -d     # MySQL 시작
+docker compose -f docker-compose-db.yml down       # MySQL 중지
+docker compose -f docker-compose-db.yml down -v    # MySQL 중지 + 데이터 삭제
+docker exec -it ncp-cloud-db mysql -umigration -pmigration1234 modules_db
 
-# ─── 이미지 관리 ───
-kind load docker-image <이미지:태그> --name db-migration  # 이미지 로드
+# ─── Jenkins ───
+docker compose up -d                               # Jenkins 시작
+docker compose down                                # Jenkins 중지
 
-# ─── Job 관리 ───
-kubectl get jobs                                  # Job 목록
-kubectl describe job db-migration-job             # Job 상세
-kubectl logs job/db-migration-job                 # Job 로그
-kubectl delete job db-migration-job               # Job 삭제
+# ─── Kind 클러스터 ───
+kind create cluster --config kind-config.yml
+kind delete cluster --name db-migration
+kind load docker-image <이미지:태그> --name db-migration
 
-# ─── MySQL 접속 ───
-kubectl -n database exec -it deploy/mysql -- mysql -uroot -proot modules_db
-
-# ─── 디버깅 ───
-kubectl get pods --all-namespaces                 # 전체 Pod 확인
-kubectl describe pod <pod-name>                   # Pod 상세 정보
-kubectl get events --sort-by=.metadata.creationTimestamp  # 이벤트 확인
-
-# ─── Docker Compose ───
-docker compose up -d                              # 전체 서비스 시작
-docker compose down                               # 전체 서비스 중지
-docker compose logs -f jenkins                    # Jenkins 로그 실시간 확인
+# ─── K8s Job ───
+kubectl get jobs
+kubectl logs job/db-migration-job
+kubectl delete job db-migration-job
 ```
 
 ---
@@ -280,13 +312,14 @@ docker compose logs -f jenkins                    # Jenkins 로그 실시간 확
 # K8s 리소스 삭제
 kubectl delete -f k8s/migration-job.yml --ignore-not-found
 kubectl delete -f k8s/db-secret.yml --ignore-not-found
-kubectl delete -f k8s/mysql-deployment.yml --ignore-not-found
+kubectl delete -f k8s/ncp-db-service.yml --ignore-not-found
 
 # Kind 클러스터 삭제
 kind delete cluster --name db-migration
 
 # Docker Compose 정리
 docker compose down -v
+docker compose -f docker-compose-db.yml down -v
 
 # Docker 이미지 정리
 docker rmi db-migration:v1
@@ -296,35 +329,36 @@ docker rmi db-migration:v1
 
 ## 트러블슈팅
 
-### Kind 클러스터가 생성되지 않는 경우
+### Job에서 외부 MySQL 연결 실패
 
 ```bash
-# Docker Desktop이 실행 중인지 확인
-docker info
+# 1. 외부 MySQL이 실행 중인지 확인
+docker ps | grep ncp-cloud-db
 
-# 기존 클러스터 삭제 후 재생성
-kind delete cluster --name db-migration
-kind create cluster --config kind-config.yml
+# 2. Kind 클러스터에서 호스트 접근 가능한지 확인
+kubectl run -it --rm debug --image=busybox --restart=Never -- \
+    wget -qO- --timeout=3 host.docker.internal:3308 || echo "port check done"
+
+# 3. host.docker.internal이 안 되면 Gateway IP 사용
+docker network inspect kind | grep Gateway
+# 출력된 IP(예: 172.18.0.1)를 db-secret.yml의 DB_HOST에 입력
 ```
 
-### Migration Job이 ImagePullBackOff 상태인 경우
+### Migration Job이 ImagePullBackOff
 
 ```bash
 # kind load를 했는지 확인
 kind load docker-image db-migration:v1 --name db-migration
 
-# migration-job.yml에 imagePullPolicy: Never 추가 필요할 수 있음
+# migration-job.yml에 imagePullPolicy: Never 가 있는지 확인
 ```
 
-### MySQL 연결 실패 (Job이 Error 상태)
+### NCP Cloud DB 연결 실패 (운영)
 
 ```bash
-# MySQL Pod가 Running 상태인지 확인
-kubectl -n database get pods
-
-# MySQL Service가 생성되었는지 확인
-kubectl -n database get svc
-
-# DNS 해석이 되는지 확인
-kubectl run -it --rm debug --image=busybox --restart=Never -- nslookup mysql-service.database.svc.cluster.local
+# 1. NKS와 Cloud DB가 같은 VPC에 있는지 확인 (NCP 콘솔)
+# 2. Cloud DB ACG에 NKS Worker Node Subnet이 허용되어 있는지 확인
+# 3. Cloud DB Private Domain이 NKS 내부에서 해석되는지 확인
+kubectl run -it --rm debug --image=busybox --restart=Never -- \
+    nslookup db-migration-mysql.cdb.ntruss.com
 ```

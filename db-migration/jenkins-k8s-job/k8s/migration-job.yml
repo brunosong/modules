@@ -18,7 +18,7 @@ spec:
       containers:
         - name: flyway-migration
           image: brunosong/db-migration:latest
-          imagePullPolicy: Never
+          imagePullPolicy: Always
           envFrom:
             - secretRef:
                 name: db-migration-secret

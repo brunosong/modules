@@ -4,7 +4,7 @@ services:
   # Jenkins (DinD 방식 - Docker 안에서 Docker 사용)
   # ───────────────────────────────────────────────
   jenkins:
-    image: jenkins/jenkins:lts-jdk21
+    build: ./jenkins
     container_name: jenkins-k8s
     ports:
       - "8080:8080"     # Jenkins UI
@@ -17,6 +17,7 @@ services:
       - jenkins-home:/var/jenkins_home
       - docker-certs:/certs/client:ro
       - ./jenkins-plugins.txt:/usr/share/jenkins/ref/plugins.txt
+      - ./kubeconfig:/var/jenkins_home/.kube/config:ro   # Jenkins용 kubeconfig (generate-kubeconfig.cmd로 생성)
     depends_on:
       - docker-dind
     networks:
@@ -41,28 +42,9 @@ services:
         aliases:
           - docker
 
-  # ───────────────────────────────────────────────
-  # MySQL (로컬 테스트용 - Kind 클러스터 외부)
-  # ───────────────────────────────────────────────
-  mysql:
-    image: mysql:8.0
-    container_name: jenkins-k8s-job-mysql
-    ports:
-      - "3308:3306"
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_ROOT_HOST: '%'
-      MYSQL_DATABASE: modules_db
-    volumes:
-      - mysql-data:/var/lib/mysql
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --bind-address=0.0.0.0
-    networks:
-      - jenkins-net
-
 volumes:
   jenkins-home:
   docker-certs:
-  mysql-data:
 
 networks:
   jenkins-net:
