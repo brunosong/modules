@@ -37,8 +37,15 @@ pipeline {
 
         stage('Load Image to Kind') {
             steps {
-                // 레지스트리 push 없이 Kind 클러스터에 이미지 직접 로드
-                sh "kind load docker-image ${IMAGE_NAME}:${IMAGE_TAG} --name ${KIND_CLUSTER}"
+                // kind load 대신 docker save + ctr import로 수동 로드
+                // (Jenkins 컨테이너 안에서 `kind load`가 containerd 감지 실패하는 문제 우회)
+                sh """
+                    docker save ${IMAGE_NAME}:${IMAGE_TAG} -o /tmp/image.tar
+                    docker cp /tmp/image.tar ${KIND_CLUSTER}-control-plane:/tmp/image.tar
+                    docker exec ${KIND_CLUSTER}-control-plane ctr -n k8s.io images import /tmp/image.tar
+                    docker exec ${KIND_CLUSTER}-control-plane rm -f /tmp/image.tar
+                    rm -f /tmp/image.tar
+                """
             }
         }
 
