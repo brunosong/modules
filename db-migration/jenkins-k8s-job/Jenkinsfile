@@ -2,11 +2,9 @@ pipeline {
     agent any
 
     environment {
-        // NCP Container Registry (NCR)
-        NCR_REGISTRY = credentials('ncr-registry')   // 예: xxxxx.kr.ncr.ntruss.com
         IMAGE_NAME   = 'db-migration'
         IMAGE_TAG    = "${BUILD_NUMBER}"
-        NCR_CRED     = credentials('ncr-credentials') // NCP API Key (Access Key / Secret Key)
+        KIND_CLUSTER = 'db-migration'
     }
 
     parameters {
@@ -28,28 +26,25 @@ pipeline {
             }
         }
 
-        stage('Build & Push Docker Image') {
+        stage('Build Docker Image') {
             steps {
                 dir('db-migration/jenkins-k8s-job') {
-                    sh """
-                        # NCP Container Registry 로그인
-                        docker login ${NCR_REGISTRY} -u ${NCR_CRED_USR} -p ${NCR_CRED_PSW}
-
-                        # 이미지 빌드 & 푸시
-                        docker build -t ${NCR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} .
-                        docker push ${NCR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
-                    """
+                    sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
                 }
             }
         }
 
-        stage('Apply NCP DB Service') {
+        stage('Load Image to Kind') {
+            steps {
+                // 레지스트리 push 없이 Kind 클러스터에 이미지 직접 로드
+                sh "kind load docker-image ${IMAGE_NAME}:${IMAGE_TAG} --name ${KIND_CLUSTER}"
+            }
+        }
+
+        stage('Apply External DB Service') {
             steps {
                 dir('db-migration/jenkins-k8s-job') {
-                    sh '''
-                        # NCP DB ExternalName 서비스 등록
-                        kubectl apply -f k8s/ncp-db-service.yml
-                    '''
+                    sh 'kubectl apply -f k8s/ncp-db-service.yml'
                 }
             }
         }
@@ -58,14 +53,14 @@ pipeline {
             steps {
                 dir('db-migration/jenkins-k8s-job') {
                     sh """
-                        # Secret 적용 (NCP DB 접속 정보)
+                        # DB 접속 정보 Secret 적용
                         kubectl apply -f k8s/db-secret.yml
 
-                        # 기존 Job이 있으면 삭제
+                        # 기존 Job 삭제
                         kubectl delete job db-migration-job --ignore-not-found=true
 
-                        # 이미지 태그를 NCR 이미지로 교체하여 Job 실행
-                        sed "s|brunosong/db-migration:latest|${NCR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}|g" \
+                        # 이미지 태그 교체하여 Job 실행
+                        sed "s|brunosong/db-migration:latest|${IMAGE_NAME}:${IMAGE_TAG}|g" \
                             k8s/migration-job.yml | kubectl apply -f -
 
                         # Job 완료 대기 (최대 5분)
@@ -84,7 +79,7 @@ pipeline {
 
     post {
         success {
-            echo 'NCP Cloud DB 마이그레이션 성공!'
+            echo 'DB 마이그레이션 성공!'
         }
         failure {
             echo 'DB 마이그레이션 실패. K8s Job 로그를 확인하세요.'
