@@ -9,6 +9,14 @@ services:
     build: ./jenkins
     container_name: jenkins-k8s
     user: root   # Docker 소켓 접근 권한 (Windows Docker Desktop 호환)
+    environment:
+      # user:root로 실행하면 HOME=/root가 되어 kubectl이 /root/.kube/config를 찾는다.
+      # KUBECONFIG를 명시해서 마운트된 파일을 쓰도록 강제한다.
+      - KUBECONFIG=/var/jenkins_home/.kube/config
+      # DinD로 전환이 필요할 때는 아래 3줄 주석 해제 (호스트 Docker 우선)
+      # - DOCKER_HOST=tcp://docker-dind:2376
+      # - DOCKER_CERT_PATH=/certs/client
+      # - DOCKER_TLS_VERIFY=1
     ports:
       - "8080:8080"     # Jenkins UI
       - "50000:50000"   # Jenkins Agent
@@ -19,11 +27,6 @@ services:
       - ./kubeconfig:/var/jenkins_home/.kube/config:ro     # Jenkins용 kubeconfig
       - //var/run/docker.sock:/var/run/docker.sock          # 호스트 Docker 소켓 공유 (기본 사용)
       - ../../:/workspace/modules:ro                        # 로컬 프로젝트 소스 공유 (Git 없이 테스트용)
-    # DinD로 전환이 필요할 때는 아래 environment 주석 해제 (호스트 Docker 우선)
-    # environment:
-    #   - DOCKER_HOST=tcp://docker-dind:2376
-    #   - DOCKER_CERT_PATH=/certs/client
-    #   - DOCKER_TLS_VERIFY=1
     depends_on:
       - docker-dind
     networks:

@@ -18,7 +18,7 @@ spec:
       containers:
         - name: flyway-migration
           image: brunosong/db-migration:latest
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent   # 로컬 Kind: 노드에 이미지 있으면 재사용 (레지스트리 pull 안 함)
           envFrom:
             - secretRef:
                 name: db-migration-secret
