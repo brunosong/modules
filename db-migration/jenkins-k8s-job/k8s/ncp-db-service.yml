@@ -1,18 +1,26 @@
 # ──────────────────────────────────────────────────
-# 방법 1: ExternalName (운영 - NCP Cloud DB Domain)
+# 외부 DB를 K8s Service로 추상화
+# Pod는 IP가 아닌 Service 이름(external-mysql)으로 접근
+# ──────────────────────────────────────────────────
+
+# ──────────────────────────────────────────────────
+# 운영 (NKS + NCP Cloud DB): ExternalName 방식
+# Service 이름(external-mysql) → NCP DB Private Domain으로 DNS 매핑
 # ──────────────────────────────────────────────────
 # apiVersion: v1
 # kind: Service
 # metadata:
-#   name: ncp-mysql
+#   name: external-mysql
 #   namespace: default
 # spec:
 #   type: ExternalName
 #   externalName: db-migration-mysql.cdb.ntruss.com
+#   ports:
+#     - port: 3306
 
 # ──────────────────────────────────────────────────
-# 방법 2: Headless + Endpoints (로컬 - 클러스터 외부 IP 직접 지정)
-# Kind 클러스터에서 호스트의 docker-compose MySQL에 접근
+# 로컬 (Kind + docker-compose MySQL): Endpoints 직접 지정
+# Service 이름(external-mysql) → 호스트의 MySQL IP:PORT로 매핑
 # ──────────────────────────────────────────────────
 apiVersion: v1
 kind: Service
@@ -21,19 +29,18 @@ metadata:
   namespace: default
 spec:
   ports:
-    - port: 3308
-      targetPort: 3308
+    - port: 3308          # Service 가상 포트 (Pod에서 호출할 포트)
+      targetPort: 3308    # Endpoints의 실제 포트
 
 ---
 apiVersion: v1
 kind: Endpoints
 metadata:
-  name: external-mysql
+  name: external-mysql    # Service와 같은 이름이어야 자동 바인딩됨
   namespace: default
 subsets:
   - addresses:
-      # Kind 클러스터에서 호스트 머신 접근 시
-      # docker network inspect kind 로 Gateway IP 확인 후 입력
-      - ip: "172.18.0.1"
+      # 호스트 MySQL의 IP (docker network inspect로 확인한 값)
+      - ip: "172.23.0.2"
     ports:
       - port: 3308
