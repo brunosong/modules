@@ -1,30 +1,36 @@
 services:
 
   # ───────────────────────────────────────────────
-  # Jenkins (DinD 방식 - Docker 안에서 Docker 사용)
+  # Jenkins
+  #   - 호스트 Docker 소켓을 직접 공유 (docker build / kind load용)
+  #   - DinD 컨테이너도 별도 존재 (DOCKER_HOST로 필요 시 전환 가능)
   # ───────────────────────────────────────────────
   jenkins:
     build: ./jenkins
     container_name: jenkins-k8s
+    user: root   # Docker 소켓 접근 권한 (Windows Docker Desktop 호환)
     ports:
       - "8080:8080"     # Jenkins UI
       - "50000:50000"   # Jenkins Agent
-    environment:
-      - DOCKER_HOST=tcp://docker-dind:2376
-      - DOCKER_CERT_PATH=/certs/client
-      - DOCKER_TLS_VERIFY=1
     volumes:
       - jenkins-home:/var/jenkins_home
       - docker-certs:/certs/client:ro
       - ./jenkins-plugins.txt:/usr/share/jenkins/ref/plugins.txt
-      - ./kubeconfig:/var/jenkins_home/.kube/config:ro   # Jenkins용 kubeconfig (generate-kubeconfig.cmd로 생성)
+      - ./kubeconfig:/var/jenkins_home/.kube/config:ro     # Jenkins용 kubeconfig
+      - //var/run/docker.sock:/var/run/docker.sock          # 호스트 Docker 소켓 공유 (기본 사용)
+      - ../../:/workspace/modules:ro                        # 로컬 프로젝트 소스 공유 (Git 없이 테스트용)
+    # DinD로 전환이 필요할 때는 아래 environment 주석 해제 (호스트 Docker 우선)
+    # environment:
+    #   - DOCKER_HOST=tcp://docker-dind:2376
+    #   - DOCKER_CERT_PATH=/certs/client
+    #   - DOCKER_TLS_VERIFY=1
     depends_on:
       - docker-dind
     networks:
       - jenkins-net
 
   # ───────────────────────────────────────────────
-  # Docker-in-Docker (Jenkins에서 Docker 빌드용)
+  # Docker-in-Docker (선택: 격리된 Docker 데몬이 필요할 때)
   # ───────────────────────────────────────────────
   docker-dind:
     image: docker:dind

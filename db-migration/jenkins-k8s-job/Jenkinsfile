@@ -83,8 +83,14 @@ pipeline {
             echo 'DB 마이그레이션 성공!'
         }
         failure {
-            echo 'DB 마이그레이션 실패. K8s Job 로그를 확인하세요.'
-            sh 'kubectl logs job/db-migration-job || true'
+            echo 'DB 마이그레이션 실패. 위 stage 로그를 확인하세요.'
+            sh '''
+                if kubectl get job db-migration-job >/dev/null 2>&1; then
+                    kubectl logs job/db-migration-job
+                else
+                    echo "(Job이 아직 생성되지 않음 - 이전 stage에서 실패)"
+                fi
+            '''
         }
     }
 }
