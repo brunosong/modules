@@ -8,7 +8,9 @@
       "Bash(./gradlew :springAi:classes)",
       "Bash(netstat -ano)",
       "Bash(taskkill:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(docker network *)",
+      "Bash(docker exec db-migration-control-plane *)"
     ]
   }
 }

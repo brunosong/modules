@@ -20,7 +20,8 @@
 
 # ──────────────────────────────────────────────────
 # 로컬 (Kind + docker-compose MySQL): Endpoints 직접 지정
-# Service 이름(external-mysql) → 호스트의 MySQL IP:PORT로 매핑
+# 사전 조건: docker network connect kind ncp-cloud-db
+# IP 확인:  docker inspect ncp-cloud-db | Select-String IPAddress
 # ──────────────────────────────────────────────────
 apiVersion: v1
 kind: Service
@@ -29,8 +30,8 @@ metadata:
   namespace: default
 spec:
   ports:
-    - port: 3308          # Service 가상 포트 (Pod에서 호출할 포트)
-      targetPort: 3308    # Endpoints의 실제 포트
+    - port: 3306          # Pod가 호출하는 포트
+      targetPort: 3306    # 실제 DB 포트
 
 ---
 apiVersion: v1
@@ -40,7 +41,6 @@ metadata:
   namespace: default
 subsets:
   - addresses:
-      # 호스트 MySQL의 IP (docker network inspect로 확인한 값)
-      - ip: "172.23.0.2"
+      - ip: "172.22.0.3"   # kind 네트워크에서의 ncp-cloud-db IP
     ports:
-      - port: 3308
+      - port: 3306
