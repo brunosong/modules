@@ -1,0 +1,92 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = 'db-migration'
+        IMAGE_TAG  = "${BUILD_NUMBER}"
+        KIND_CLUSTER = 'db-migration'
+    }
+
+    parameters {
+        choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'prod'], description: '배포 환경 선택')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build Migration App') {
+            steps {
+                dir('db-migration/jenkins-k8s-job') {
+                    sh '../../gradlew bootJar'
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                dir('db-migration/jenkins-k8s-job') {
+                    sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
+                }
+            }
+        }
+
+        stage('Load Image to Kind') {
+            steps {
+                // Kind 클러스터에 이미지를 직접 로드 (레지스트리 push 불필요)
+                sh "kind load docker-image ${IMAGE_NAME}:${IMAGE_TAG} --name ${KIND_CLUSTER}"
+            }
+        }
+
+        stage('Deploy MySQL to K8s') {
+            steps {
+                dir('db-migration/jenkins-k8s-job') {
+                    sh '''
+                        kubectl apply -f k8s/mysql-deployment.yml
+                        kubectl -n database rollout status deployment/mysql --timeout=120s
+                    '''
+                }
+            }
+        }
+
+        stage('Run K8s Migration Job') {
+            steps {
+                dir('db-migration/jenkins-k8s-job') {
+                    sh """
+                        # Secret 적용
+                        kubectl apply -f k8s/db-secret.yml
+
+                        # 기존 Job이 있으면 삭제
+                        kubectl delete job db-migration-job --ignore-not-found=true
+
+                        # 이미지 태그를 업데이트하여 Job 실행
+                        sed "s|brunosong/db-migration:latest|${IMAGE_NAME}:${IMAGE_TAG}|g" \
+                            k8s/migration-job.yml | kubectl apply -f -
+
+                        # Job 완료 대기 (최대 5분)
+                        kubectl wait --for=condition=complete job/db-migration-job --timeout=300s
+                    """
+                }
+            }
+        }
+
+        stage('Verify Migration') {
+            steps {
+                sh 'kubectl logs job/db-migration-job'
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'K8s Job을 통한 DB 마이그레이션 성공!'
+        }
+        failure {
+            echo 'DB 마이그레이션 실패. K8s Job 로그를 확인하세요.'
+            sh 'kubectl logs job/db-migration-job || true'
+        }
+    }
+}

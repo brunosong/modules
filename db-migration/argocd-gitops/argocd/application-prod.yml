@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: db-migration-prod
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/brunosong/db-migration.git
+    targetRevision: main
+    path: k8s
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+
+  # 운영 환경: 수동 승인 배포 (automated 없음)
+  # ArgoCD UI에서 DBA 또는 관리자가 직접 Sync 버튼을 눌러야 배포됨
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+      - Replace=true

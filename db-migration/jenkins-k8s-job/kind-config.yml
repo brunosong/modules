@@ -1,0 +1,10 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: db-migration
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # NodePort로 MySQL 접근이 필요한 경우
+      - containerPort: 30306
+        hostPort: 30306
+        protocol: TCP

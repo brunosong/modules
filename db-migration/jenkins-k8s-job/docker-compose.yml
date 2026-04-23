@@ -1,0 +1,69 @@
+services:
+
+  # ───────────────────────────────────────────────
+  # Jenkins (DinD 방식 - Docker 안에서 Docker 사용)
+  # ───────────────────────────────────────────────
+  jenkins:
+    image: jenkins/jenkins:lts-jdk21
+    container_name: jenkins-k8s
+    ports:
+      - "8080:8080"     # Jenkins UI
+      - "50000:50000"   # Jenkins Agent
+    environment:
+      - DOCKER_HOST=tcp://docker-dind:2376
+      - DOCKER_CERT_PATH=/certs/client
+      - DOCKER_TLS_VERIFY=1
+    volumes:
+      - jenkins-home:/var/jenkins_home
+      - docker-certs:/certs/client:ro
+      - ./jenkins-plugins.txt:/usr/share/jenkins/ref/plugins.txt
+    depends_on:
+      - docker-dind
+    networks:
+      - jenkins-net
+
+  # ───────────────────────────────────────────────
+  # Docker-in-Docker (Jenkins에서 Docker 빌드용)
+  # ───────────────────────────────────────────────
+  docker-dind:
+    image: docker:dind
+    container_name: jenkins-dind
+    privileged: true
+    environment:
+      - DOCKER_TLS_CERTDIR=/certs
+    volumes:
+      - docker-certs:/certs/client
+      - jenkins-home:/var/jenkins_home
+    ports:
+      - "2376:2376"
+    networks:
+      jenkins-net:
+        aliases:
+          - docker
+
+  # ───────────────────────────────────────────────
+  # MySQL (로컬 테스트용 - Kind 클러스터 외부)
+  # ───────────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: jenkins-k8s-job-mysql
+    ports:
+      - "3308:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_ROOT_HOST: '%'
+      MYSQL_DATABASE: modules_db
+    volumes:
+      - mysql-data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --bind-address=0.0.0.0
+    networks:
+      - jenkins-net
+
+volumes:
+  jenkins-home:
+  docker-certs:
+  mysql-data:
+
+networks:
+  jenkins-net:
+    driver: bridge

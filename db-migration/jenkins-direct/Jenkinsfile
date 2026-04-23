@@ -1,0 +1,51 @@
+pipeline {
+    agent any
+
+    environment {
+        DB_URL      = credentials('db-url')
+        DB_USERNAME = credentials('db-username')
+        DB_PASSWORD = credentials('db-password')
+    }
+
+    parameters {
+        choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'prod'], description: '배포 환경 선택')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build Migration App') {
+            steps {
+                dir('db-migration/jenkins-direct') {
+                    sh '../../gradlew bootJar'
+                }
+            }
+        }
+
+        stage('Run Migration') {
+            steps {
+                dir('db-migration/jenkins-direct') {
+                    sh """
+                        java -jar build/libs/jenkins-direct-1.0-SNAPSHOT.jar \
+                            --spring.datasource.url=${DB_URL} \
+                            --spring.datasource.username=${DB_USERNAME} \
+                            --spring.datasource.password=${DB_PASSWORD}
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'DB 마이그레이션 성공!'
+        }
+        failure {
+            echo 'DB 마이그레이션 실패. 로그를 확인하세요.'
+        }
+    }
+}

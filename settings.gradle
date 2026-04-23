@@ -19,3 +19,7 @@ include 'springAi'
 include 'flyway'
 
 include 'liquibase'
+
+include 'db-migration:jenkins-direct'
+include 'db-migration:jenkins-k8s-job'
+include 'db-migration:argocd-gitops'

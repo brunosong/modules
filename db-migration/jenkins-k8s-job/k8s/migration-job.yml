@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migration-job
+  namespace: default
+  labels:
+    app: db-migration
+    method: jenkins-k8s-job
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: db-migration
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: flyway-migration
+          image: brunosong/db-migration:latest
+          imagePullPolicy: Never
+          envFrom:
+            - secretRef:
+                name: db-migration-secret
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
