@@ -21,7 +21,8 @@ pipeline {
         stage('Build Migration App') {
             steps {
                 dir('db-migration/jenkins-k8s-job') {
-                    sh '../../gradlew bootJar'
+                    // Windows에서 체크아웃된 파일은 실행 권한이 없을 수 있어 chmod 후 실행
+                    sh 'chmod +x ../../gradlew && ../../gradlew :db-migration:jenkins-k8s-job:bootJar'
                 }
             }
         }
