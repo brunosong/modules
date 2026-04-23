@@ -37,14 +37,11 @@ pipeline {
 
         stage('Load Image to Kind') {
             steps {
-                // kind load 대신 docker save + ctr import로 수동 로드
-                // (Jenkins 컨테이너 안에서 `kind load`가 containerd 감지 실패하는 문제 우회)
+                // kind load 대신 docker save 출력을 바로 ctr import로 파이프
+                // 중간 파일 없이 stdin으로 전달해서 경로/권한 문제 회피
                 sh """
-                    docker save ${IMAGE_NAME}:${IMAGE_TAG} -o /tmp/image.tar
-                    docker cp /tmp/image.tar ${KIND_CLUSTER}-control-plane:/tmp/image.tar
-                    docker exec ${KIND_CLUSTER}-control-plane ctr -n k8s.io images import /tmp/image.tar
-                    docker exec ${KIND_CLUSTER}-control-plane rm -f /tmp/image.tar
-                    rm -f /tmp/image.tar
+                    docker save ${IMAGE_NAME}:${IMAGE_TAG} | \
+                        docker exec -i ${KIND_CLUSTER}-control-plane ctr -n k8s.io images import -
                 """
             }
         }
