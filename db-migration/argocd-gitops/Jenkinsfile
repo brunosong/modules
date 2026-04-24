@@ -1,0 +1,82 @@
+pipeline {
+    agent any
+
+    environment {
+        REGISTRY   = 'kind-registry:5000'
+        IMAGE_NAME = 'db-migration-argocd'
+        MANIFEST   = 'db-migration/argocd-gitops/k8s/migration-job.yml'
+        GIT_HOST   = 'github.com'
+        GIT_REPO   = 'brunosong/modules.git'
+        GIT_BRANCH = 'master'
+    }
+
+    options {
+        disableConcurrentBuilds()
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    env.IMAGE_TAG = sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+                }
+                echo "Building image tag: ${env.IMAGE_TAG}"
+            }
+        }
+
+        stage('Build Jar') {
+            steps {
+                sh 'chmod +x gradlew'
+                sh './gradlew :db-migration:argocd-gitops:bootJar --no-daemon'
+            }
+        }
+
+        stage('Build & Push Image') {
+            steps {
+                dir('db-migration/argocd-gitops') {
+                    sh '''
+                        docker build -t "$REGISTRY/$IMAGE_NAME:$IMAGE_TAG" .
+                        docker push    "$REGISTRY/$IMAGE_NAME:$IMAGE_TAG"
+                    '''
+                }
+            }
+        }
+
+        stage('Update Manifest & Git Push') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'github-pat',
+                    usernameVariable: 'GIT_USER',
+                    passwordVariable: 'GIT_TOKEN'
+                )]) {
+                    sh '''
+                        set -e
+                        sed -i -E "s|^([[:space:]]*image:[[:space:]]*).*|\\1$REGISTRY/$IMAGE_NAME:$IMAGE_TAG|" "$MANIFEST"
+
+                        git config user.email "jenkins@ci.local"
+                        git config user.name  "jenkins-bot"
+
+                        git add "$MANIFEST"
+                        if git diff --cached --quiet; then
+                            echo "No manifest change, skipping commit"
+                            exit 0
+                        fi
+
+                        git commit -m "ci: bump image to $IMAGE_TAG [skip ci]"
+                        git push "https://$GIT_USER:$GIT_TOKEN@$GIT_HOST/$GIT_REPO" HEAD:$GIT_BRANCH
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Pushed $REGISTRY/$IMAGE_NAME:$IMAGE_TAG. ArgoCD will sync shortly."
+        }
+    }
+}

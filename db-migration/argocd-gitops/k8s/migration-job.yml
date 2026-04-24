@@ -22,8 +22,8 @@ spec:
       restartPolicy: Never
       containers:
         - name: flyway-migration
-          image: brunosong/db-migration:latest
-          imagePullPolicy: Never
+          image: kind-registry:5000/db-migration-argocd:latest
+          imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef:
                 name: db-migration-secret
