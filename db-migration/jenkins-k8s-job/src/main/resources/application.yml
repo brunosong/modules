@@ -10,3 +10,5 @@ spring:
     locations: classpath:db/migration
     baseline-on-migrate: true
     baseline-version: 0
+    # 앱별 schema history 테이블 — 여러 마이그레이션 앱이 같은 DB 공유할 때 충돌 방지
+    table: flyway_schema_history_jenkins_k8s_job
