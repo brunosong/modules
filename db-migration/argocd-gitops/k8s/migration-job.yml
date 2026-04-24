@@ -22,7 +22,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: flyway-migration
-          image: brunosong/db-migration-argocd:latest
+          image: brunosong/db-migration:latest
           imagePullPolicy: Never
           envFrom:
             - secretRef:

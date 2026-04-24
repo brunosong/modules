@@ -7,9 +7,9 @@ spec:
   project: default
 
   source:
-    repoURL: https://github.com/brunosong/db-migration.git
-    targetRevision: main
-    path: k8s
+    repoURL: https://github.com/brunosong/modules.git
+    targetRevision: master
+    path: db-migration/argocd-gitops/k8s
 
   destination:
     server: https://kubernetes.default.svc

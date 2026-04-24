@@ -10,7 +10,8 @@
       "Bash(taskkill:*)",
       "Bash(git commit:*)",
       "Bash(docker network *)",
-      "Bash(docker exec db-migration-control-plane *)"
+      "Bash(docker exec db-migration-control-plane *)",
+      "Bash(kubectl *)"
     ]
   }
 }
