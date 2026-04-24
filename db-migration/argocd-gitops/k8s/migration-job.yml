@@ -22,7 +22,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: flyway-migration
-          image: localhost:5001/db-migration-argocd:de2022f
+          image: localhost:5001/db-migration-argocd:12690fe
           imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef:
