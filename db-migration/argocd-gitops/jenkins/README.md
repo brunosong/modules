@@ -34,35 +34,59 @@ https://github.com/settings/tokens 에서 **Generate new token (classic)** → `
 
 ---
 
-## 2. 로컬 Docker Registry 기동 & 네트워크 연결
+## 2. 로컬 Docker Registry 기동 & Kind 연결
 
-Kind 노드와 Jenkins(DinD) 양쪽에서 같은 레지스트리를 쓸 수 있게 `kind` 도커 네트워크에 얹습니다.
+Jenkins(`jenkins-k8s`)는 **호스트 Docker socket**을 bind mount해서 사용하므로, push는 호스트 Docker daemon이 실행합니다. 호스트 daemon은 `kind` 네트워크 안의 컨테이너명(`kind-registry`)을 DNS로 찾지 못하기 때문에, **`localhost:5001`(포트 매핑)로 push**하는 방식을 씁니다.
 
+Kind 노드는 `kind-registry:5000`(내부 DNS)으로 pull해야 하므로, containerd에 **`localhost:5001` → `http://kind-registry:5000` 리다이렉트** 설정을 넣어 둡니다.
+
+### 2-1. 레지스트리 컨테이너 기동 + Kind 네트워크 연결
 ```bash
-# 레지스트리 기동 (호스트 5001 → 컨테이너 5000)
 docker run -d --restart=always \
   --name kind-registry \
   -p 127.0.0.1:5001:5000 \
   registry:2
 
-# kind 네트워크에 연결 (Kind 노드가 DNS로 kind-registry를 찾을 수 있게)
+# Kind 노드가 DNS로 찾을 수 있도록 kind 네트워크에 연결
 docker network connect kind kind-registry
-
-# Jenkins의 docker 데몬(DinD)도 같은 네트워크에 연결
-# (Jenkins가 docker push kind-registry:5000/... 을 할 수 있게)
-docker network connect kind jenkins-dind
 ```
 
-**확인**:
+### 2-2. Kind containerd 패치 (hosts.toml)
 ```bash
-# kind 네트워크에 두 컨테이너가 있어야 함
-docker network inspect kind --format '{{range .Containers}}{{.Name}}{{"\n"}}{{end}}'
-# → db-migration-control-plane
-# → kind-registry
-# → jenkins-dind
+NODE=db-migration-control-plane
+
+docker exec $NODE bash -c '
+cat >> /etc/containerd/config.toml << "EOF"
+
+[plugins."io.containerd.grpc.v1.cri".registry]
+  config_path = "/etc/containerd/certs.d"
+EOF
+
+mkdir -p /etc/containerd/certs.d/localhost:5001
+cat > /etc/containerd/certs.d/localhost:5001/hosts.toml << "EOF"
+server = "http://kind-registry:5000"
+
+[host."http://kind-registry:5000"]
+  capabilities = ["pull", "resolve"]
+EOF
+'
+
+docker exec $NODE systemctl restart containerd
 ```
 
-> **주의**: Kind 클러스터를 다시 만들면 `kind` 네트워크가 재생성되어 위 connect가 풀립니다. 재설치 후 위 3개 명령 중 `network connect` 2개를 다시 실행해야 합니다.
+### 2-3. 검증
+```bash
+# 호스트에서 push
+docker pull hello-world
+docker tag  hello-world localhost:5001/test:smoke
+docker push localhost:5001/test:smoke
+
+# Kind에서 pull (containerd가 kind-registry:5000으로 리다이렉트)
+kubectl run smoke-test --image=localhost:5001/test:smoke --restart=Never --rm -it
+# → "Hello from Docker!" 출력되면 성공
+```
+
+> **주의**: Kind 클러스터를 다시 만들면 containerd 설정이 초기화됩니다. `kind-config.yml`에 `containerdConfigPatches`로 박아두거나, 재생성 후 2-2를 다시 실행해야 합니다.
 
 ---
 
@@ -120,9 +144,10 @@ Jenkins가 manifest를 커밋하면 그 커밋이 다시 Jenkins를 트리거해
 
 ## 5. 첫 실행 체크리스트
 
-- [ ] `kind-registry` 컨테이너 Running
-- [ ] `kind-registry`가 `kind` 네트워크에 연결됨
-- [ ] `jenkins-dind`가 `kind` 네트워크에 연결됨
+- [ ] `kind-registry` 컨테이너 Running & `kind` 네트워크에 연결됨
+- [ ] Kind 노드 containerd에 hosts.toml 적용 & containerd 재시작됨
+- [ ] `docker push localhost:5001/...` 이 호스트에서 작동
+- [ ] `kubectl run ... --image=localhost:5001/...` 이 클러스터에서 작동
 - [ ] Jenkins에 `github-pat` credential 등록됨
 - [ ] Jenkins 파이프라인 Job 생성됨
 - [ ] Jenkins 이미지에 `git`, `docker` CLI, Java 21 (gradlew 실행용) 설치됨
@@ -152,13 +177,13 @@ kubectl logs -f job/db-migration-argocd-job
 
 ## 트러블슈팅
 
-### `docker push` 가 `connection refused`
-- `jenkins-dind`가 `kind` 네트워크에 연결되어 있지 않음.
-- `docker network connect kind jenkins-dind` 재실행.
+### `docker push`에서 `no such host` / `connection refused`
+- 호스트 Docker daemon이 `localhost:5001`로 접근 못함.
+- `docker ps`로 `kind-registry`가 Running이고 `127.0.0.1:5001->5000/tcp` 매핑되어 있는지 확인.
 
-### Kind 노드에서 `ErrImagePull: kind-registry:5000/...`
-- `kind-registry`가 `kind` 네트워크에 없음 → Kind 노드가 DNS로 못 찾음.
-- `docker network connect kind kind-registry` 재실행.
+### Kind 노드에서 `ErrImagePull: localhost:5001/...`
+- containerd hosts.toml 설정이 누락됨 → 2-2 재실행 & `systemctl restart containerd`.
+- `kind-registry`가 `kind` 네트워크에 없음 → `docker network connect kind kind-registry`.
 
 ### `gradlew: Permission denied`
 - Jenkins 이미지에서 gradlew 실행 권한이 없는 경우.

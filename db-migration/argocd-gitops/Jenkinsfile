@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        REGISTRY   = 'kind-registry:5000'
+        REGISTRY   = 'localhost:5001'
         IMAGE_NAME = 'db-migration-argocd'
         MANIFEST   = 'db-migration/argocd-gitops/k8s/migration-job.yml'
         GIT_HOST   = 'github.com'
