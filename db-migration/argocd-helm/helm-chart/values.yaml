@@ -1,0 +1,27 @@
+# 기본값 — dev/prod values 가 여기 위에 얹힘.
+# env 마다 다르지 않은 것은 여기에만 두면 된다.
+
+env: dev
+
+image:
+  repository: localhost:5001/db-migration-argocd-helm
+  tag: latest
+  pullPolicy: IfNotPresent
+
+db:
+  host: external-mysql
+  port: "3306"
+  name: modules_db
+  username: migration
+  password: migration1234
+
+job:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 300
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 250m
+    limits:
+      memory: 512Mi
+      cpu: 500m

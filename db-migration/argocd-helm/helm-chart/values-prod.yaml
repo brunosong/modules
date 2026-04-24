@@ -1,0 +1,18 @@
+# prod 환경 오버라이드 — NCP Cloud DB, 더 큰 리소스
+env: prod
+
+db:
+  host: your-prod-db.cdb.ntruss.com
+  port: "3306"
+  name: modules_db
+  username: migration_prod
+  password: CHANGE_ME
+
+job:
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 500m
+    limits:
+      memory: 1Gi
+      cpu: "1000m"

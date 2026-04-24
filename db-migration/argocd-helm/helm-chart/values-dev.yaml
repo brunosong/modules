@@ -1,0 +1,8 @@
+# dev 환경 오버라이드 — 개발용 DB, 작은 리소스
+env: dev
+
+db:
+  host: external-mysql
+  name: modules_db
+  username: migration
+  password: migration1234

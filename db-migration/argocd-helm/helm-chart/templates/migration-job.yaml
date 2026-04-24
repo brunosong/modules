@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "db-migration-helm.fullname" . }}
+  labels:
+    {{- include "db-migration-helm.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: {{ .Values.job.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "db-migration-helm.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: flyway-migration
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - secretRef:
+                name: {{ include "db-migration-helm.fullname" . }}-secret
+          resources:
+            {{- toYaml .Values.job.resources | nindent 12 }}

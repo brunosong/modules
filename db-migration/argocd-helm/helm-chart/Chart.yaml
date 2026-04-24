@@ -1,0 +1,6 @@
+apiVersion: v2
+name: db-migration-helm
+version: 0.1.0
+appVersion: "1.0"
+description: Flyway DB migration Job with per-env values (dev/prod).
+type: application

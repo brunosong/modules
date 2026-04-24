@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: db-migration-helm-prod
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/brunosong/modules.git
+    targetRevision: master
+    path: db-migration/argocd-helm/helm-chart
+    helm:
+      valueFiles:
+        - values-prod.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+
+  # 운영: automated 블록 없음 → ArgoCD UI/CLI 에서 수동 Sync
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+      - Replace=true
