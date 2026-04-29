@@ -1,0 +1,17 @@
+group = 'com.brunosong'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+// MR(=PR) 검증 시점에 Flyway validate / migrate 를 실행하는 Spring Boot 앱
+tasks.named('bootJar') { enabled = true }
+tasks.named('jar') { enabled = false }
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-mysql'
+    runtimeOnly 'com.mysql:mysql-connector-j'
+}

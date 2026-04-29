@@ -1,0 +1,206 @@
+// GitLab MR(=PR) 트리거 → Jenkins 동작 예제 파이프라인
+//
+//  - Merge Request open / update : Build 만 수행 (검증) — 실제 DB 변경 없음
+//  - target branch (예: main) push: Build + Flyway migrate (실제 반영)
+//  - 결과는 GitLab Commit Status 로 회신되어 MR 화면에 ✅/❌ 로 표시된다.
+//
+// 사전 조건:
+//  1) Jenkins 에 GitLab Plugin 설치
+//  2) Jenkins → System → GitLab connection 등록
+//     (Connection name: 'gitlab-local', URL: http://gitlab.local, API token credential)
+//  3) GitLab 프로젝트 → Settings → Webhooks 에 Jenkins URL 등록
+//  4) Credentials:
+//     - db-url / db-username / db-password : MySQL 접속 정보 (Secret text)
+pipeline {
+    agent any
+
+    options {
+        gitLabConnection('gitlab-local')
+        gitlabBuilds(builds: ['build', 'migrate'])
+    }
+
+    triggers {
+        gitlab(
+            // master 로 향하는 MR 만 트리거. push 는 받지 않음.
+            triggerOnPush: false,
+            triggerOnMergeRequest: true,
+            triggerOpenMergeRequestOnPush: 'never',
+            skipWorkInProgressMergeRequest: true,
+            ciSkip: true,
+            setBuildDescription: true,
+            addNoteOnMergeRequest: true,
+            addCiMessage: true,
+            addVoteOnMergeRequest: true,
+            // target branch 필터 — 'master' 로 가는 MR 만 받음
+            branchFilterType: 'NameBasedFilter',
+            targetBranchRegex: '',
+            includeBranchesSpec: 'master',
+            excludeBranchesSpec: ''
+        )
+    }
+
+    environment {
+        DB_URL      = credentials('db-url')
+        DB_USERNAME = credentials('db-username')
+        DB_PASSWORD = credentials('db-password')
+
+        // ─── 알림 설정 ──────────────────────────────────────────────
+        // Jira: Cloud 면 https://<org>.atlassian.net, DC 면 https://jira.your.co
+        JIRA_BASE_URL      = 'https://your-org.atlassian.net'
+        // Jira "Done" transition ID — 아래 GUIDE 의 "Step 7" 참고해서 한 번만 조회
+        JIRA_DONE_TRANSITION_ID = '31'
+        // username:api_token (Cloud) 또는 username:password (DC) — Secret text
+        JIRA_AUTH = credentials('jira-basic-auth')
+
+        // Teams: Power Automate Workflows webhook URL — Secret text
+        TEAMS_WEBHOOK_URL = credentials('teams-webhook-url')
+
+        // GitLab plugin 이 주입: MERGE / PUSH / NOTE ...
+        IS_MR = "${env.gitlabActionType == 'MERGE'}"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    echo "gitlabActionType  = ${env.gitlabActionType}"
+                    echo "gitlabSourceBranch = ${env.gitlabSourceBranch}"
+                    echo "gitlabTargetBranch = ${env.gitlabTargetBranch}"
+                    echo "IS_MR = ${env.IS_MR}"
+                }
+            }
+        }
+
+        stage('build') {
+            steps {
+                gitlabCommitStatus(name: 'build') {
+                    dir('db-migration/jenkins-gitlab-mr') {
+                        sh '../../gradlew bootJar'
+                    }
+                }
+            }
+        }
+
+        stage('migrate') {
+            steps {
+                gitlabCommitStatus(name: 'migrate') {
+                    script {
+                        if (env.IS_MR == 'true') {
+                            // MR 단계: DB 변경 없이 빌드 성공 = 검증 성공으로 간주.
+                            //   - SQL 파일이 classpath:db/migration 에 잘 들어갔는지
+                            //   - JAR 가 정상 패키징되는지
+                            // 실제 dry-run 이 필요하면 'shadow MySQL' 띄워서 같은
+                            // JAR 를 거기에 한 번 돌리는 식으로 확장하면 된다.
+                            echo 'MR 검증 모드 — DB 변경 없음 (빌드 통과로 검증 갈음)'
+                        } else {
+                            echo '실제 반영 모드 — Flyway migrate 수행'
+                            dir('db-migration/jenkins-gitlab-mr') {
+                                sh """
+                                    java -jar build/libs/jenkins-gitlab-mr-1.0-SNAPSHOT.jar \
+                                        --spring.datasource.url=${DB_URL} \
+                                        --spring.datasource.username=${DB_USERNAME} \
+                                        --spring.datasource.password=${DB_PASSWORD}
+                                """
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            script {
+                def mode = env.IS_MR == 'true' ? 'MR 검증' : '마이그레이션'
+                echo "GitLab ${mode} 성공"
+
+                // 실제 반영(머지 후 push)일 때만 Jira 완료 + Teams 알림.
+                // MR 검증 단계엔 알림 안 보냄 (소음 방지).
+                if (env.IS_MR != 'true') {
+                    def issueKey = extractJiraKey()
+                    if (issueKey) {
+                        transitionJira(issueKey, env.JIRA_DONE_TRANSITION_ID)
+                    } else {
+                        echo "Jira 티켓 키를 못 찾음 — 브랜치/커밋 메시지에 PROJ-123 형식 포함 필요"
+                    }
+                    notifyTeams('SUCCESS', '00C853', issueKey)
+                }
+            }
+        }
+        failure {
+            script {
+                def mode = env.IS_MR == 'true' ? 'MR 검증' : '마이그레이션'
+                echo "GitLab ${mode} 실패 — Jenkins 콘솔 로그 확인"
+                // 실패는 MR / push 모두 알림 (조용히 실패하면 아무도 모름)
+                def issueKey = extractJiraKey()
+                notifyTeams('FAILURE', 'D50000', issueKey)
+            }
+        }
+    }
+}
+
+// ─── 헬퍼: 브랜치명 / 커밋 메시지에서 Jira 티켓 키(PROJ-123) 추출 ───
+def extractJiraKey() {
+    def candidates = [
+        env.gitlabSourceBranch,
+        env.gitlabMergeRequestTitle,
+        sh(script: 'git log -1 --pretty=%s', returnStdout: true).trim()
+    ].findAll { it }
+    def m = candidates.join(' ') =~ /([A-Z][A-Z0-9]+-\d+)/
+    return m ? m[0][1] : null
+}
+
+// ─── 헬퍼: Jira REST API 로 티켓 transition (Done 처리) ───
+def transitionJira(String issueKey, String transitionId) {
+    def url = "${env.JIRA_BASE_URL}/rest/api/3/issue/${issueKey}/transitions"
+    def payload = """{"transition":{"id":"${transitionId}"}}"""
+    def http = sh(
+        returnStdout: true,
+        script: """
+            curl -sS -o /tmp/jira-resp.txt -w '%{http_code}' \
+                -u '${env.JIRA_AUTH}' \
+                -H 'Content-Type: application/json' \
+                -X POST '${url}' \
+                -d '${payload}'
+        """
+    ).trim()
+    if (http == '204') {
+        echo "Jira ${issueKey} → Done 처리 완료"
+    } else {
+        echo "Jira transition 실패 (HTTP ${http}): ${sh(script:'cat /tmp/jira-resp.txt', returnStdout:true)}"
+    }
+}
+
+// ─── 헬퍼: Teams Incoming Webhook 으로 MessageCard 전송 ───
+def notifyTeams(String status, String color, String issueKey) {
+    def title = "DB Migration ${status}"
+    def text = """
+- **Job**: ${env.JOB_NAME} #${env.BUILD_NUMBER}
+- **Branch**: ${env.gitlabSourceBranch ?: env.GIT_BRANCH ?: 'n/a'}
+- **Jira**: ${issueKey ? "[${issueKey}](${env.JIRA_BASE_URL}/browse/${issueKey})" : '연결 티켓 없음'}
+- **Build URL**: ${env.BUILD_URL}
+""".trim()
+
+    def payload = groovy.json.JsonOutput.toJson([
+        '@type'      : 'MessageCard',
+        '@context'   : 'http://schema.org/extensions',
+        themeColor   : color,
+        summary      : title,
+        title        : title,
+        text         : text
+    ])
+
+    def http = sh(
+        returnStdout: true,
+        script: """
+            curl -sS -o /tmp/teams-resp.txt -w '%{http_code}' \
+                -H 'Content-Type: application/json' \
+                -X POST '${env.TEAMS_WEBHOOK_URL}' \
+                -d '${payload.replace("'", "\\'")}'
+        """
+    ).trim()
+    echo "Teams 알림 전송 (HTTP ${http})"
+}

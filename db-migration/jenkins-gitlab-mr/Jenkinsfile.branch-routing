@@ -1,0 +1,190 @@
+// GitLab Webhook → Jenkins (브랜치/이벤트별 라우팅) — GitLab Plugin 버전
+//
+//  - dev   브랜치 push  : Build + Deploy(dev)
+//  - stage 브랜치 push  : Build + Deploy(stage)
+//  - MR (target=dev|stage) : Build 만 → 성공이면 GitLab Commit Status 'success' 회신
+//  - 그 외는 webhook 자체에서 필터링되어 잡 시작 안 함
+//
+// 사전 조건:
+//  1) Jenkins 플러그인: GitLab Plugin (Generic Webhook Trigger 필요 없음)
+//  2) Jenkins → System → GitLab connection 등록 (이름: 'gitlab-local')
+//  3) GitLab → Settings → Webhooks
+//     - URL: http://<jenkins>/project/<job-name>
+//     - Trigger: Push events, Merge request events 둘 다 체크
+//  4) Credentials: gitlab-token (체크아웃용)
+
+pipeline {
+    agent any
+
+    options {
+        gitLabConnection('gitlab-local')
+        gitlabBuilds(builds: ['build', 'deploy'])
+        timestamps()
+    }
+
+    triggers {
+        gitlab(
+            triggerOnPush: true,
+            triggerOnMergeRequest: true,
+            triggerOpenMergeRequestOnPush: 'never',
+            skipWorkInProgressMergeRequest: true,
+            ciSkip: true,
+            setBuildDescription: true,
+            addNoteOnMergeRequest: true,
+            addCiMessage: true,
+            addVoteOnMergeRequest: true,
+
+            // push 일 때: source branch 가 dev|stage 인 것만
+            // MR  일 때: target branch 가 dev|stage 인 것만
+            branchFilterType: 'RegexBasedFilter',
+            sourceBranchRegex: '^(dev|stage)$',
+            targetBranchRegex: '^(dev|stage)$'
+        )
+    }
+
+    environment {
+        // GitLab Plugin 이 주입하는 gitlabActionType: PUSH / MERGE / NOTE ...
+        IS_PUSH = "${env.gitlabActionType == 'PUSH'}"
+        IS_MR   = "${env.gitlabActionType == 'MERGE'}"
+        // commit status 회신 시 GitLab 이 인식하는 SHA — MR 은 source last commit, push 는 after
+        STATUS_SHA = "${env.gitlabActionType == 'MERGE' ? env.gitlabMergeRequestLastCommit : env.gitlabAfter}"
+    }
+
+    stages {
+
+        stage('Resolve target') {
+            steps {
+                script {
+                    if (env.IS_PUSH == 'true') {
+                        env.BRANCH    = env.gitlabBranch ?: env.gitlabSourceBranch
+                        env.IS_MR_BUILD = 'false'
+                    } else if (env.IS_MR == 'true') {
+                        // MR: GitLab 의 가상 머지 ref(refs/merge-requests/N/merge) 를 체크아웃
+                        // → 머지 후 코드를 미리 빌드. 실패해도 target 브랜치는 안 더러워짐.
+                        env.BRANCH      = env.gitlabTargetBranch
+                        env.IS_MR_BUILD = 'true'
+                    } else {
+                        error "지원하지 않는 이벤트: ${env.gitlabActionType}"
+                    }
+                    echo "ACTION=${env.gitlabActionType} BRANCH=${env.BRANCH} IS_MR_BUILD=${env.IS_MR_BUILD}"
+                    currentBuild.description = env.IS_MR == 'true'
+                        ? "MR !${env.gitlabMergeRequestIid} ${env.gitlabSourceBranch} → ${env.gitlabTargetBranch} (pre-merge)"
+                        : "push ${env.BRANCH} by ${env.gitlabUserName}"
+                }
+            }
+        }
+
+        stage('Checkout') {
+            steps {
+                script {
+                    def repoUrl = 'http://gitlab.local/root/pushtestsample2.git'
+                    if (env.IS_MR_BUILD == 'true') {
+                        // MR pre-merge ref 를 직접 fetch + checkout (Jenkins git plugin 이
+                        // refs/merge-requests/* 를 branch 로 잘 못 풀어서 수동 처리).
+                        def iid = env.gitlabMergeRequestIid
+                        // 워크스페이스에 .git 없으면 빈 repo 만들고 fetch
+                        sh """
+                            if [ ! -d .git ]; then git init -q; fi
+                            git config remote.origin.url '${repoUrl}' || git remote add origin '${repoUrl}'
+                        """
+                        withCredentials([usernamePassword(
+                            credentialsId: 'gitlab-token',
+                            usernameVariable: 'GU',
+                            passwordVariable: 'GP'
+                        )]) {
+                            sh """
+                                git -c http.extraheader="Authorization: Basic \$(printf '%s:%s' "\$GU" "\$GP" | base64 -w0)" \
+                                    fetch --no-tags origin '+refs/merge-requests/${iid}/merge:refs/remotes/origin/mr-${iid}-merge'
+                            """
+                        }
+                        sh "git checkout -f refs/remotes/origin/mr-${iid}-merge"
+                        sh "git --no-pager log -1 --oneline"
+                    } else {
+                        // push: 일반 브랜치 체크아웃
+                        git url: repoUrl,
+                            credentialsId: 'gitlab-token',
+                            branch: env.BRANCH
+                        if (env.gitlabAfter) {
+                            sh "git checkout ${env.gitlabAfter}"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Build') {
+            steps {
+                script {
+                    // commit status 는 GitLab 이 아는 SHA(=source last commit / push after) 로 직접 보고.
+                    // gitlabCommitStatus wrapper 는 HEAD SHA(가상 머지 sha) 를 써서 400 나옴.
+                    updateGitlabCommitStatus(name: 'build', state: 'running')
+                    try {
+                        sh 'chmod +x ./gradlew && ./gradlew clean build'
+                        updateGitlabCommitStatus(name: 'build', state: 'success')
+                    } catch (e) {
+                        updateGitlabCommitStatus(name: 'build', state: 'failed')
+                        throw e
+                    }
+                }
+            }
+        }
+
+        // ───── push 이벤트 전용 ─────
+        stage('Deploy (dev)') {
+            when { expression { env.IS_PUSH == 'true' && env.BRANCH == 'dev' } }
+            steps {
+                script {
+                    updateGitlabCommitStatus(name: 'deploy', state: 'running')
+                    try {
+                        echo "▶ dev 파이프라인 실행"
+                        sh './scripts/deploy-dev.sh'
+                        updateGitlabCommitStatus(name: 'deploy', state: 'success')
+                    } catch (e) {
+                        updateGitlabCommitStatus(name: 'deploy', state: 'failed')
+                        throw e
+                    }
+                }
+            }
+        }
+
+        stage('Deploy (stage)') {
+            when { expression { env.IS_PUSH == 'true' && env.BRANCH == 'stage' } }
+            steps {
+                script {
+                    updateGitlabCommitStatus(name: 'deploy', state: 'running')
+                    try {
+                        echo "▶ stage 파이프라인 실행"
+                        sh './scripts/deploy-stage.sh'
+                        updateGitlabCommitStatus(name: 'deploy', state: 'success')
+                    } catch (e) {
+                        updateGitlabCommitStatus(name: 'deploy', state: 'failed')
+                        throw e
+                    }
+                }
+            }
+        }
+
+        // ───── MR 전용: 빌드만 통과시키면 끝 ─────
+        stage('MR verify') {
+            when { expression { env.IS_MR == 'true' } }
+            steps {
+                echo "MR !${env.gitlabMergeRequestIid} (${env.gitlabSourceBranch} → ${env.gitlabTargetBranch}) 빌드 검증 통과"
+            }
+        }
+    }
+
+    post {
+        success {
+            script {
+                if (env.IS_MR == 'true') {
+                    echo "✅ MR !${env.gitlabMergeRequestIid} 빌드 성공 — GitLab 에 success 회신 완료"
+                } else {
+                    echo "✅ ${env.BRANCH} 배포 성공"
+                }
+            }
+        }
+        failure {
+            echo "❌ ${env.gitlabActionType} (${env.BRANCH}) 실패 — Jenkins 콘솔 확인"
+        }
+    }
+}

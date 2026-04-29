@@ -1,5 +1,8 @@
 # ArgoCD + Helm chart 기반 DB 마이그레이션 가이드
 
+> ⚠️ **2026-04 변경**: `Dockerfile` 이 `db-migration/infra/Dockerfile.app` 으로 통합됨
+> (모든 시나리오 공유, 와일드카드 jar). 자세한 내용은 `db-migration/infra/README.md`.
+
 `argocd-gitops` 모듈이 **plain YAML** 로 마이그레이션 Job 을 정의했다면,
 이 모듈은 동일한 Job 을 **Helm chart** 로 템플릿화해서 dev/prod 등 **환경별로 다른 값**을 주입하는 방식을 보여준다.
 

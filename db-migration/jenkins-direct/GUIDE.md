@@ -1,5 +1,10 @@
 # Jenkins 직접 실행 DB 마이그레이션 가이드
 
+> ⚠️ **2026-04 변경**: 도커 파일이 모두 `db-migration/infra/` 로 통합됨.
+> 이 가이드의 `cd db-migration/jenkins-direct; docker compose up` 명령은
+> `docker compose -f db-migration/infra/docker-compose.jenkins.yml up`
+> (Jenkins/DinD/MySQL 통합본 사용) 로 대체. 자세한 내용은 `db-migration/infra/README.md` 참고.
+
 Jenkins 에이전트에서 Spring Boot + Flyway 앱을 직접 실행하여 DB 마이그레이션을 수행하는 방법.
 가장 단순한 방식으로, Jenkins가 DB에 직접 접근한다.
 

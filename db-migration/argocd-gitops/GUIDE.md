@@ -1,5 +1,12 @@
 # ArgoCD 기반 GitOps DB 마이그레이션 가이드
 
+> ⚠️ **2026-04 변경**: 도커 파일이 모두 `db-migration/infra/` 로 통합됨.
+> - `Dockerfile` → `db-migration/infra/Dockerfile.app` (모든 시나리오 공유)
+> - `docker-compose.yml` (mysql) → `db-migration/infra/docker-compose.jenkins.yml` 의 `ncp-cloud-db` 사용
+> - `kind-config.yml` → `db-migration/infra/kind-config.yml` *(cluster name 이 다르므로 필요시 수정)*
+>
+> 자세한 내용은 `db-migration/infra/README.md`.
+
 ArgoCD가 Git 저장소 변경을 감지하여 K8s Job으로 Flyway 마이그레이션을 자동 실행하는 방법.
 DB는 K8s 클러스터 외부에 있으며(NCP Cloud DB), 로컬에서는 docker-compose MySQL로 시뮬레이션한다.
 

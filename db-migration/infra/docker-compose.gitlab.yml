@@ -1,0 +1,55 @@
+# GitLab CE — MR(=PR) 트리거 / Webhook 발신
+#
+# project name 을 'jenkins-gitlab-mr' 로 박아서 기존 볼륨
+# (jenkins-gitlab-mr_gitlab-config / -data / -logs) 를 그대로 사용.
+#
+# 네트워크: docker-compose.jenkins.yml 과 공유하는 'db-migration-net'.
+# 사용 전 한 번만:
+#   docker network create db-migration-net
+#
+# 사용:
+#   docker compose -f db-migration/infra/docker-compose.gitlab.yml up -d
+name: db-migration-gitlab
+
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:latest
+    container_name: db-migration-gitlab
+    hostname: gitlab.local
+    restart: unless-stopped
+    ports:
+      - "8090:80"
+      - "2222:22"
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab.local'
+        nginx['listen_port'] = 80
+        gitlab_rails['gitlab_shell_ssh_port'] = 2222
+        gitlab_rails['gitlab_signup_enabled'] = false
+        gitlab_rails['initial_root_password'] = 'gitlabroot1234!'
+        prometheus_monitoring['enable'] = false
+    volumes:
+      - gitlab-config:/etc/gitlab
+      - gitlab-logs:/var/log/gitlab
+      - gitlab-data:/var/opt/gitlab
+    shm_size: '256m'
+    networks:
+      db-migration-net:
+        aliases:
+          - gitlab.local
+
+volumes:
+  gitlab-config:
+    external: true
+    name: jenkins-gitlab-mr_gitlab-config
+  gitlab-logs:
+    external: true
+    name: jenkins-gitlab-mr_gitlab-logs
+  gitlab-data:
+    external: true
+    name: jenkins-gitlab-mr_gitlab-data
+
+networks:
+  db-migration-net:
+    name: db-migration-net
+    external: true

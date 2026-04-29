@@ -1,0 +1,103 @@
+# Jenkins (커스텀 이미지: docker CLI + kubectl + kind) + DinD + 외부 MySQL
+#
+# project name 을 'jenkins-k8s-job' 로 박아서 기존 볼륨
+# (jenkins-k8s-job_jenkins-home / -docker-certs / -mysql-data) 와
+# 컨테이너명 (jenkins-k8s / jenkins-dind / ncp-cloud-db) 을 그대로 사용.
+#
+# 네트워크: docker-compose.gitlab.yml 과 공유하는 'db-migration-net'.
+# 사용 전 한 번만:
+#   docker network create db-migration-net
+#
+# 사용:
+#   docker compose -f db-migration/infra/docker-compose.jenkins.yml up -d
+name: db-migration-jenkins
+
+services:
+
+  # ───────────────────────────────────────────────
+  # Jenkins
+  #   - 호스트 Docker 소켓을 직접 공유 (docker build / kind load 용)
+  #   - DinD 컨테이너도 별도 존재 (DOCKER_HOST 로 필요 시 전환 가능)
+  # ───────────────────────────────────────────────
+  jenkins:
+    build:
+      context: .
+      dockerfile: Dockerfile.jenkins
+    container_name: db-migration-jenkins
+    user: root
+    environment:
+      - KUBECONFIG=/var/jenkins_home/.kube/config
+      # DinD 로 전환 시 아래 3줄 주석 해제 (호스트 Docker 우선 사용)
+      # - DOCKER_HOST=tcp://docker-dind:2376
+      # - DOCKER_CERT_PATH=/certs/client
+      # - DOCKER_TLS_VERIFY=1
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins-home:/var/jenkins_home
+      - docker-certs:/certs/client:ro
+      - ./jenkins-plugins.txt:/usr/share/jenkins/ref/plugins.txt
+      - ./kubeconfig:/var/jenkins_home/.kube/config:ro
+      - //var/run/docker.sock:/var/run/docker.sock
+      # - ../../:/workspace/modules:ro    # 프로젝트 루트 (modules) 공유
+    depends_on:
+      - docker-dind
+    networks:
+      - db-migration-net
+
+  # ───────────────────────────────────────────────
+  # Docker-in-Docker (선택: 격리된 데몬이 필요할 때)
+  # ───────────────────────────────────────────────
+  docker-dind:
+    image: docker:dind
+    container_name: jenkins-dind
+    privileged: true
+    environment:
+      - DOCKER_TLS_CERTDIR=/certs
+    volumes:
+      - docker-certs:/certs/client
+      - jenkins-home:/var/jenkins_home
+    ports:
+      - "2376:2376"
+    networks:
+      db-migration-net:
+        aliases:
+          - docker
+
+  # ───────────────────────────────────────────────
+  # MySQL (K8s 클러스터 외부 — NCP Cloud DB 역할)
+  #   원래 docker-compose-db.yml 에 분리돼 있던 서비스를 합침.
+  # ───────────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: db-migration-mysql
+    ports:
+      - "3308:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_ROOT_HOST: '%'
+      MYSQL_DATABASE: modules_db
+      MYSQL_USER: migration
+      MYSQL_PASSWORD: migration1234
+    volumes:
+      - mysql-data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --bind-address=0.0.0.0
+    networks:
+      - db-migration-net
+
+volumes:
+  jenkins-home:
+    external: true
+    name: jenkins-k8s-job_jenkins-home
+  docker-certs:
+    external: true
+    name: jenkins-k8s-job_docker-certs
+  mysql-data:
+    external: true
+    name: jenkins-k8s-job_mysql-data
+
+networks:
+  db-migration-net:
+    name: db-migration-net
+    external: true

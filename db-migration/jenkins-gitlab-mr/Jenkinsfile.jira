@@ -1,0 +1,185 @@
+// GitLab MR 머지 → master push → Flyway 마이그레이션 → Jira 코멘트 + Done 전이
+//
+//  흐름:
+//   1) MR 단계         : Build 만 (Jira 안 건드림)
+//   2) master push 단계 : Build + Flyway migrate
+//   3) migrate 성공     : Jira 에 빌드 정보 코멘트 + Done transition
+//   4) 어디서든 실패    : Jira 에 실패 코멘트 (전이는 안 함)
+//
+//  사전 조건:
+//   - Jenkins GitLab Plugin + connection 'gitlab-local' 등록
+//   - Credentials (Secret text):
+//       db-url / db-username / db-password         : DB 접속
+//       jira-base-url                              : 예) https://your-org.atlassian.net
+//       jira-auth                                  : "<email>:<API_TOKEN>"  (Jira Cloud)
+//       jira-done-transition-id                    : "31" 같은 transition ID
+//
+//  Jira 티켓 키는 브랜치명 또는 커밋 메시지에서 PROJ-123 형식을 정규식으로 추출.
+//  키가 없으면 조용히 skip (운영 사고 방지).
+
+pipeline {
+    agent any
+
+    options {
+        gitLabConnection('gitlab-local')
+        gitlabBuilds(builds: ['build', 'migrate'])
+        timestamps()
+    }
+
+    triggers {
+        gitlab(
+            triggerOnPush: true,
+            triggerOnMergeRequest: true,
+            triggerOpenMergeRequestOnPush: 'never',
+            skipWorkInProgressMergeRequest: true,
+            ciSkip: true,
+            branchFilterType: 'NameBasedFilter',
+            includeBranchesSpec: 'master'
+        )
+    }
+
+    environment {
+        DB_URL      = credentials('db-url')
+        DB_USERNAME = credentials('db-username')
+        DB_PASSWORD = credentials('db-password')
+
+        JIRA_BASE_URL           = credentials('jira-base-url')
+        JIRA_AUTH               = credentials('jira-auth')
+        JIRA_DONE_TRANSITION_ID = credentials('jira-done-transition-id')
+
+        IS_MR = "${env.gitlabActionType == 'MERGE'}"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps { checkout scm }
+        }
+
+        stage('build') {
+            steps {
+                gitlabCommitStatus(name: 'build') {
+                    dir('db-migration/jenkins-gitlab-mr') {
+                        sh '../../gradlew bootJar'
+                    }
+                }
+            }
+        }
+
+        stage('migrate') {
+            when { expression { env.IS_MR != 'true' } }
+            steps {
+                gitlabCommitStatus(name: 'migrate') {
+                    dir('db-migration/jenkins-gitlab-mr') {
+                        sh """
+                            java -jar build/libs/jenkins-gitlab-mr-1.0-SNAPSHOT.jar \
+                                --spring.datasource.url=${DB_URL} \
+                                --spring.datasource.username=${DB_USERNAME} \
+                                --spring.datasource.password=${DB_PASSWORD}
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            script {
+                if (env.IS_MR == 'true') {
+                    echo 'MR 검증 성공 — Jira 동작 없음'
+                    return
+                }
+                def issueKey = extractJiraKey()
+                if (!issueKey) {
+                    echo 'Jira 키 못 찾음 (브랜치/커밋에 PROJ-123 형식 필요) — skip'
+                    return
+                }
+                addJiraComment(issueKey,
+                    "✅ DB migration 성공\n" +
+                    "Job: ${env.JOB_NAME} #${env.BUILD_NUMBER}\n" +
+                    "Build URL: ${env.BUILD_URL}")
+                transitionJira(issueKey, env.JIRA_DONE_TRANSITION_ID)
+            }
+        }
+        failure {
+            script {
+                def issueKey = extractJiraKey()
+                if (!issueKey) { return }
+                def stageName = env.IS_MR == 'true' ? 'MR 검증' : '마이그레이션'
+                addJiraComment(issueKey,
+                    "❌ ${stageName} 실패 — Jenkins 콘솔 확인\n" +
+                    "Job: ${env.JOB_NAME} #${env.BUILD_NUMBER}\n" +
+                    "Build URL: ${env.BUILD_URL}")
+            }
+        }
+    }
+}
+
+// ─── 브랜치명 / MR 제목 / 커밋 메시지에서 첫 번째 Jira 키 추출 ───
+def extractJiraKey() {
+    def candidates = [
+        env.gitlabSourceBranch,
+        env.gitlabMergeRequestTitle,
+        env.GIT_BRANCH,
+        sh(script: 'git log -1 --pretty=%s', returnStdout: true).trim()
+    ].findAll { it }
+    def m = candidates.join(' ') =~ /([A-Z][A-Z0-9]+-\d+)/
+    return m ? m[0][1] : null
+}
+
+// ─── Jira Cloud REST v3: 코멘트 추가 (ADF 포맷 필수) ───
+def addJiraComment(String issueKey, String text) {
+    def url = "${env.JIRA_BASE_URL}/rest/api/3/issue/${issueKey}/comment"
+    def body = groovy.json.JsonOutput.toJson([
+        body: [
+            type   : 'doc',
+            version: 1,
+            content: text.split('\n').collect { line ->
+                [
+                    type   : 'paragraph',
+                    content: [[ type: 'text', text: line ]]
+                ]
+            }
+        ]
+    ])
+    def resp = sh(
+        returnStdout: true,
+        script: """
+            curl -sS -o /tmp/jira-comment.txt -w '%{http_code}' \
+                -u '${env.JIRA_AUTH}' \
+                -H 'Content-Type: application/json' \
+                -X POST '${url}' \
+                --data-binary @- <<'JSON'
+${body}
+JSON
+        """
+    ).trim()
+    if (resp == '201') {
+        echo "Jira ${issueKey} 코멘트 추가 완료"
+    } else {
+        echo "Jira 코멘트 실패 (HTTP ${resp}): ${sh(script:'cat /tmp/jira-comment.txt', returnStdout:true)}"
+    }
+}
+
+// ─── Jira Cloud REST v3: transition (Done 처리) ───
+def transitionJira(String issueKey, String transitionId) {
+    def url = "${env.JIRA_BASE_URL}/rest/api/3/issue/${issueKey}/transitions"
+    def payload = groovy.json.JsonOutput.toJson([transition: [id: transitionId]])
+    def resp = sh(
+        returnStdout: true,
+        script: """
+            curl -sS -o /tmp/jira-trans.txt -w '%{http_code}' \
+                -u '${env.JIRA_AUTH}' \
+                -H 'Content-Type: application/json' \
+                -X POST '${url}' \
+                --data-binary @- <<'JSON'
+${payload}
+JSON
+        """
+    ).trim()
+    if (resp == '204') {
+        echo "Jira ${issueKey} → Done 처리 완료"
+    } else {
+        echo "Jira transition 실패 (HTTP ${resp}): ${sh(script:'cat /tmp/jira-trans.txt', returnStdout:true)}"
+    }
+}

@@ -1,5 +1,15 @@
 # Jenkins + Kubernetes Job DB 마이그레이션 가이드 (NCP DB)
 
+> ⚠️ **2026-04 변경**: 도커 파일이 모두 `db-migration/infra/` 로 통합됨.
+> - `Dockerfile` → `db-migration/infra/Dockerfile.app` (와일드카드 jar, 모든 시나리오 공유)
+> - `jenkins/Dockerfile` → `db-migration/infra/Dockerfile.jenkins`
+> - `docker-compose.yml` + `docker-compose-db.yml` → `db-migration/infra/docker-compose.jenkins.yml` (mysql 통합)
+> - `kind-config.yml` / `kubeconfig` / `jenkins-plugins.txt` / `setup-kubeconfig.*` → `db-migration/infra/`
+>
+> 이 가이드의 `cd db-migration/jenkins-k8s-job; docker compose up` 명령은
+> `docker compose -f db-migration/infra/docker-compose.jenkins.yml up` 으로 대체.
+> 자세한 내용은 `db-migration/infra/README.md`.
+
 Jenkins에서 Docker 이미지를 빌드하고, K8s 클러스터에 Job을 생성하여
 **클러스터 외부의 DB**(NCP Cloud DB for MySQL)에 Flyway 마이그레이션을 실행하는 방법을 설명한다.
 

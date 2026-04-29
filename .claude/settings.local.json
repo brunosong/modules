@@ -1,17 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cd /d/SideProject/modules && cmd.exe /c \"gradlew.bat :springAi:build\" 2>&12)",
-      "WebSearch",
-      "Bash(ls /d/SideProject/modules/springAi/*.iml)",
-      "Bash(./gradlew :springAi:compileJava)",
-      "Bash(./gradlew :springAi:classes)",
-      "Bash(netstat -ano)",
-      "Bash(taskkill:*)",
-      "Bash(git commit:*)",
-      "Bash(docker network *)",
-      "Bash(docker exec db-migration-control-plane *)",
-      "Bash(kubectl *)"
+      "Bash(docker compose *)"
     ]
   }
 }
