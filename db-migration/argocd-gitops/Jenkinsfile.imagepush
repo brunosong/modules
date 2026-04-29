@@ -35,12 +35,13 @@ pipeline {
 
         stage('Build & Push Image') {
             steps {
-                dir('db-migration/argocd-gitops') {
-                    sh '''
-                        docker build -t "$REGISTRY/$IMAGE_NAME:$IMAGE_TAG" .
-                        docker push    "$REGISTRY/$IMAGE_NAME:$IMAGE_TAG"
-                    '''
-                }
+                sh '''
+                    docker build \
+                        -f db-migration/infra/Dockerfile.app \
+                        -t "$REGISTRY/$IMAGE_NAME:$IMAGE_TAG" \
+                        db-migration/argocd-gitops
+                    docker push "$REGISTRY/$IMAGE_NAME:$IMAGE_TAG"
+                '''
             }
         }
     }
