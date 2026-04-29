@@ -1,0 +1,229 @@
+// CI + CD 통합 파이프라인 (CI-driven sync 패턴)
+//
+// 기존 Jenkinsfile.gitlab-api 와의 차이:
+//   - GitLab 매니페스트 commit 까지는 동일
+//   - 추가로 ArgoCD 에 sync 를 직접 트리거 (--revision 으로 방금 만든 commit 만)
+//   - argocd app wait 로 Healthy & Synced 가 될 때까지 대기
+//   - Job 이 실패하면 Jenkins 빌드도 FAILURE
+//
+// 전제:
+//   - ArgoCD Application (db-migration) 의 syncPolicy.automated 블록은 비워두는 것을 권장.
+//     자동 sync 가 켜져 있어도 동작은 하지만, 그러면 두 군데서 sync 를 시도해 의미가 약해짐.
+//
+// 사전 준비
+//   1) Jenkins → Manage Jenkins → Credentials
+//        - ID: gitlab-api-token   (Secret text) ← 기존과 공통
+//        - ID: argocd-auth-token  (Secret text) ★ 새로 추가
+//             값: argocd account generate-token --account <ci-account>
+//      또는 admin 토큰을 임시로:
+//             argocd login <server> --username admin --password <pw> --insecure
+//             argocd account generate-token
+//   2) Jenkins 컨테이너에서 ArgoCD 서버에 닿을 수 있어야 함.
+//      kind 클러스터의 argocd-server 를 호스트로 port-forward 했다면
+//      Jenkins → host.docker.internal:8081 로 접근 가능.
+
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'IMAGE_TAG',  defaultValue: '12690fe',                          description: '배포할 이미지 태그')
+        string(name: 'IMAGE_REPO', defaultValue: 'localhost:5001/db-migration-argocd', description: '레지스트리 + 이미지 이름')
+    }
+
+    environment {
+        // GitLab (매니페스트 repo)
+        GITLAB_HOST = 'http://host.docker.internal:8090'
+        PROJECT_ID  = '53'                                          // ★ 본인 GitLab 매니페스트 repo Project ID
+        BRANCH      = 'master'
+        FILE_PATH   = 'db-migration/argocd-gitops/k8s/image-patch.yaml'
+
+        // ArgoCD
+        ARGOCD_HOST = 'http://host.docker.internal:8081'            // ★ 본인 ArgoCD 서버 주소
+        ARGOCD_APP  = 'db-migration'                                // ★ ArgoCD Application 이름
+        SYNC_TIMEOUT = '300'                                        // 초
+        POLL_INTERVAL = '5'                                         // 초
+    }
+
+    options {
+        disableConcurrentBuilds()
+    }
+
+    stages {
+
+        stage('Sanity check') {
+            steps {
+                withCredentials([string(credentialsId: 'gitlab-api-token', variable: 'GITLAB_TOKEN')]) {
+                    sh '''
+                        set -e
+                        echo "GitLab Project ${PROJECT_ID} 조회"
+                        curl --silent --show-error --fail \
+                            --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                            "${GITLAB_HOST}/api/v4/projects/${PROJECT_ID}" \
+                            -o /dev/null
+                        echo "OK"
+                    '''
+                }
+                withCredentials([string(credentialsId: 'argocd-auth-token', variable: 'ARGOCD_TOKEN')]) {
+                    sh '''
+                        set -e
+                        echo "ArgoCD Application ${ARGOCD_APP} 조회"
+                        curl --silent --show-error --fail \
+                            --header "Authorization: Bearer ${ARGOCD_TOKEN}" \
+                            "${ARGOCD_HOST}/api/v1/applications/${ARGOCD_APP}" \
+                            -o /dev/null
+                        echo "OK"
+                    '''
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // 1) 매니페스트 commit (Jenkinsfile.gitlab-api 와 동일)
+        //    응답에서 commit SHA 를 뽑아 다음 stage 에서 사용
+        // ─────────────────────────────────────────────────────────
+        stage('Update Manifest (GitLab API commit)') {
+            steps {
+                withCredentials([string(credentialsId: 'gitlab-api-token', variable: 'GITLAB_TOKEN')]) {
+                    script {
+                        def patchContent = """\
+- op: replace
+  path: /spec/template/spec/containers/0/image
+  value: ${params.IMAGE_REPO}:${params.IMAGE_TAG}
+""".stripIndent()
+
+                        def commitMsg = "ci: bump image to ${params.IMAGE_TAG} [skip ci]"
+
+                        withEnv([
+                            "PATCH_CONTENT=${patchContent}",
+                            "COMMIT_MSG=${commitMsg}"
+                        ]) {
+                            sh '''
+                                set -e
+                                HTTP_CODE=$(curl --silent --show-error --output /tmp/gl_resp.json --write-out "%{http_code}" \
+                                    --request POST \
+                                    --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                                    --data-urlencode "branch=${BRANCH}" \
+                                    --data-urlencode "commit_message=${COMMIT_MSG}" \
+                                    --data-urlencode "actions[][action]=update" \
+                                    --data-urlencode "actions[][file_path]=${FILE_PATH}" \
+                                    --data-urlencode "actions[][content]=${PATCH_CONTENT}" \
+                                    "${GITLAB_HOST}/api/v4/projects/${PROJECT_ID}/repository/commits")
+
+                                echo "HTTP ${HTTP_CODE}"
+                                cat /tmp/gl_resp.json
+                                echo
+
+                                case "$HTTP_CODE" in
+                                    2*) ;;
+                                    *)  echo "GitLab commit failed"; exit 1 ;;
+                                esac
+
+                                # commit SHA(full id) 를 파일로 떨궈서 다음 stage 에 전달
+                                sed -n 's/.*"id":"\\([0-9a-f]*\\)".*/\\1/p' /tmp/gl_resp.json | head -n1 > /tmp/manifest_commit_sha
+                                SHA=$(cat /tmp/manifest_commit_sha)
+                                if [ -z "$SHA" ]; then
+                                    echo "Failed to parse commit SHA"; exit 1
+                                fi
+                                echo "Manifest commit SHA: $SHA"
+                            '''
+
+                            // /tmp 파일에서 SHA 읽어 다음 stage 환경에 노출
+                            env.MANIFEST_COMMIT_SHA = readFile('/tmp/manifest_commit_sha').trim()
+                            echo "Captured MANIFEST_COMMIT_SHA = ${env.MANIFEST_COMMIT_SHA}"
+                        }
+                    }
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // 2) ArgoCD 에 sync 직접 트리거 (방금 commit 한 SHA 로만)
+        // ─────────────────────────────────────────────────────────
+        stage('Trigger ArgoCD sync') {
+            steps {
+                withCredentials([string(credentialsId: 'argocd-auth-token', variable: 'ARGOCD_TOKEN')]) {
+                    sh '''
+                        set -e
+                        echo "Sync ${ARGOCD_APP} → revision ${MANIFEST_COMMIT_SHA}"
+
+                        # POST /api/v1/applications/{name}/sync
+                        # body: revision + prune 옵션
+                        HTTP_CODE=$(curl --silent --show-error --output /tmp/argocd_sync.json --write-out "%{http_code}" \
+                            --request POST \
+                            --header "Authorization: Bearer ${ARGOCD_TOKEN}" \
+                            --header "Content-Type: application/json" \
+                            --data "{\\"revision\\":\\"${MANIFEST_COMMIT_SHA}\\",\\"prune\\":true}" \
+                            "${ARGOCD_HOST}/api/v1/applications/${ARGOCD_APP}/sync")
+
+                        echo "HTTP ${HTTP_CODE}"
+                        cat /tmp/argocd_sync.json
+                        echo
+
+                        case "$HTTP_CODE" in
+                            2*) ;;
+                            *)  echo "ArgoCD sync trigger failed"; exit 1 ;;
+                        esac
+                    '''
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // 3) Synced & Healthy 가 될 때까지 폴링
+        //    revision 이 우리 commit 과 일치하는지도 같이 확인
+        // ─────────────────────────────────────────────────────────
+        stage('Wait for Healthy') {
+            steps {
+                withCredentials([string(credentialsId: 'argocd-auth-token', variable: 'ARGOCD_TOKEN')]) {
+                    sh '''
+                        set -e
+                        ELAPSED=0
+                        while [ $ELAPSED -lt ${SYNC_TIMEOUT} ]; do
+                            curl --silent --show-error \
+                                --header "Authorization: Bearer ${ARGOCD_TOKEN}" \
+                                "${ARGOCD_HOST}/api/v1/applications/${ARGOCD_APP}" \
+                                -o /tmp/argocd_status.json
+
+                            # jq 없이 sed 로 필요한 필드만 뽑는다
+                            SYNC=$(sed -n 's/.*"sync":{"status":"\\([^"]*\\)".*/\\1/p' /tmp/argocd_status.json | head -n1)
+                            HEALTH=$(sed -n 's/.*"health":{"status":"\\([^"]*\\)".*/\\1/p' /tmp/argocd_status.json | head -n1)
+                            REV=$(sed -n 's/.*"sync":{[^}]*"revision":"\\([0-9a-f]*\\)".*/\\1/p' /tmp/argocd_status.json | head -n1)
+
+                            echo "[${ELAPSED}s] sync=${SYNC} health=${HEALTH} revision=$(echo ${REV} | cut -c1-8)"
+
+                            # 우리 commit 이 반영되었고 둘 다 정상이면 종료
+                            if [ "$SYNC" = "Synced" ] && [ "$HEALTH" = "Healthy" ] \
+                               && [ "$REV" = "${MANIFEST_COMMIT_SHA}" ]; then
+                                echo "Deploy verified: ${ARGOCD_APP} @ ${REV}"
+                                exit 0
+                            fi
+
+                            # 명백한 실패 상태면 즉시 실패 처리
+                            if [ "$HEALTH" = "Degraded" ] && [ "$REV" = "${MANIFEST_COMMIT_SHA}" ]; then
+                                echo "Application is Degraded"
+                                cat /tmp/argocd_status.json
+                                exit 1
+                            fi
+
+                            sleep ${POLL_INTERVAL}
+                            ELAPSED=$((ELAPSED + ${POLL_INTERVAL}))
+                        done
+
+                        echo "Timeout (${SYNC_TIMEOUT}s) — sync 또는 health 가 정상 상태로 진입하지 않음"
+                        cat /tmp/argocd_status.json
+                        exit 1
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "CI + CD 완료: ${env.ARGOCD_APP} @ ${env.MANIFEST_COMMIT_SHA}"
+        }
+        failure {
+            echo "파이프라인 실패 — 매니페스트 commit 또는 ArgoCD sync 결과를 확인하세요."
+        }
+    }
+}

@@ -1,0 +1,117 @@
+// GitLab REST API 로 매니페스트 repo 에 commit 만 날리는 파이프라인.
+// (이미지 빌드/푸시는 다른 파이프라인 또는 사람이 한 뒤,
+//  여기서는 새 이미지 태그를 매니페스트에 박는 commit 만 수행)
+//
+// 사전 준비 (Jenkins → Manage Jenkins → Credentials)
+//   1) Kind: Secret text
+//      ID:   gitlab-api-token
+//      Secret: <GitLab Personal Access Token (api scope)>
+//
+// 매니페스트 repo 구조 가정:
+//   pubedutdc/argocd_manifest
+//     └─ vivasam-api/
+//         ├─ vs-dev/image-patch.yaml
+//         └─ vs-prod/image-patch.yaml
+//
+// image-patch.yaml 형식 (Kustomize JSON6902 patch):
+//   - op: replace
+//     path: /spec/template/spec/containers/0/image
+//     value: <registry>/<image>:<tag>
+
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'IMAGE_TAG',  defaultValue: '12690fe',                          description: '배포할 이미지 태그')
+        string(name: 'IMAGE_REPO', defaultValue: 'localhost:5001/db-migration-argocd', description: '레지스트리 + 이미지 이름')
+    }
+
+    environment {
+        GITLAB_HOST = 'http://host.docker.internal:8090'
+        PROJECT_ID  = '53'                                          // ★ 본인 GitLab 매니페스트 repo 의 Project ID 로 교체
+        BRANCH      = 'master'
+        FILE_PATH   = 'db-migration/argocd-gitops/k8s/image-patch.yaml'
+    }
+
+    options {
+        disableConcurrentBuilds()
+    }
+
+    stages {
+
+        stage('Sanity check') {
+            steps {
+                withCredentials([string(credentialsId: 'gitlab-api-token', variable: 'GITLAB_TOKEN')]) {
+                    sh '''
+                        set -e
+                        echo "Project ${PROJECT_ID} 조회"
+                        curl --silent --show-error --fail \
+                            --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                            "${GITLAB_HOST}/api/v4/projects/${PROJECT_ID}" \
+                            -o /dev/null
+                        echo "OK"
+                    '''
+                }
+            }
+        }
+
+        stage('Update Manifest (GitLab API commit)') {
+            steps {
+                withCredentials([string(credentialsId: 'gitlab-api-token', variable: 'GITLAB_TOKEN')]) {
+                    script {
+                        def patchContent = """\
+- op: replace
+  path: /spec/template/spec/containers/0/image
+  value: ${params.IMAGE_REPO}:${params.IMAGE_TAG}
+""".stripIndent()
+
+                        def commitMsg = "ci: bump image to ${params.IMAGE_TAG} [skip ci]"
+
+                        // --data-urlencode 로 file_path / content / commit_message 를 안전하게 인코딩.
+                        // 멀티라인 content 는 환경변수로 받아 넘긴다.
+                        withEnv([
+                            "PATCH_CONTENT=${patchContent}",
+                            "COMMIT_MSG=${commitMsg}"
+                        ]) {
+                            sh '''
+                                set -e
+                                HTTP_CODE=$(curl --silent --show-error --output /tmp/gl_resp.json --write-out "%{http_code}" \
+                                    --request POST \
+                                    --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                                    --data-urlencode "branch=${BRANCH}" \
+                                    --data-urlencode "commit_message=${COMMIT_MSG}" \
+                                    --data-urlencode "actions[][action]=update" \
+                                    --data-urlencode "actions[][file_path]=${FILE_PATH}" \
+                                    --data-urlencode "actions[][content]=${PATCH_CONTENT}" \
+                                    "${GITLAB_HOST}/api/v4/projects/${PROJECT_ID}/repository/commits")
+
+                                echo "HTTP ${HTTP_CODE}"
+                                cat /tmp/gl_resp.json
+                                echo
+
+                                # 2xx 가 아니면 실패 처리
+                                case "$HTTP_CODE" in
+                                    2*) ;;
+                                    *)  echo "GitLab commit failed"; exit 1 ;;
+                                esac
+
+                                # 응답에서 short_id 뽑아 환경에 노출
+                                SHORT_ID=$(sed -n 's/.*"short_id":"\\([^"]*\\)".*/\\1/p' /tmp/gl_resp.json | head -n1)
+                                echo "Committed: ${SHORT_ID}"
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Manifest commit 완료. ArgoCD 가 곧 sync 합니다."
+        }
+        failure {
+            echo "GitLab API commit 실패 — 응답 본문을 확인하세요 (/tmp/gl_resp.json)."
+        }
+    }
+}

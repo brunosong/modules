@@ -19,6 +19,8 @@ infra/
 ├── README.md                       ← 이 파일
 ├── docker-compose.gitlab.yml       GitLab CE (project: jenkins-gitlab-mr)
 ├── docker-compose.jenkins.yml      Jenkins + DinD + MySQL (project: jenkins-k8s-job)
+├── docker-compose.argocd-fwd.yml   ArgoCD NodePort 포워더 (kind → 호스트 우회)
+├── argocd-server-nodeport.yml      argocd-server Service 를 NodePort 로 노출하는 매니페스트
 ├── Dockerfile.jenkins              Jenkins 커스텀 이미지 (docker CLI + kubectl + kind)
 ├── Dockerfile.app                  Spring Boot 앱 공용 이미지 (5개 시나리오 공유)
 ├── jenkins-plugins.txt             Jenkins 사전 설치 플러그인
@@ -76,6 +78,7 @@ docker compose -f db-migration/infra/docker-compose.jenkins.yml up -d
 | DinD TLS | 2376 | jenkins-dind | - |
 | MySQL | 3308 | ncp-cloud-db | `mysql -h 127.0.0.1 -P 3308 -u migration -pmigration1234` |
 | GitLab SSH | 2222 | jenkins-gitlab-mr-gitlab | - |
+| ArgoCD (NodePort 포워더) | 30443 | db-migration-argocd-fwd | https://localhost:30443 |
 
 ### 4. 앱 이미지 빌드 (시나리오별)
 
@@ -101,6 +104,55 @@ kind create cluster --config db-migration/infra/kind-config.yml
 
 # 삭제
 kind delete cluster --name db-migration
+```
+
+### 6. ArgoCD NodePort 노출 (kind 우회 포워더)
+
+ArgoCD 를 클러스터에 설치한 뒤, `argocd-server` 를 NodePort 로 바꾸고
+호스트 / 다른 컨테이너 (Jenkins 등) 에서 접근할 수 있도록
+socat 포워더 컨테이너를 띄운다.
+
+**왜 포워더가 필요한가**: kind 노드는 도커 컨테이너 안에 있고,
+NodePort 포트는 `kind-config.yml` 의 `extraPortMappings` 에 미리 박아둔
+포트만 호스트로 노출된다. 이 매핑은 클러스터 생성 시점에만 적용되므로,
+클러스터 재생성 없이 새 NodePort 를 호스트에 노출하려면 외부 포워더가
+필요하다.
+
+```bash
+# 1) ArgoCD Service 를 NodePort 로 변경 (30443/30080 고정)
+kubectl apply -f db-migration/infra/argocd-server-nodeport.yml
+
+# 2) 포워더 컨테이너 기동
+docker compose -f db-migration/infra/docker-compose.argocd-fwd.yml up -d
+```
+
+> 포워더는 두 네트워크 (`db-migration-net`, `kind`) 에 동시에 소속된다.
+> kind 컨트롤플레인은 항상 `kind` 네트워크에 떠 있으므로 별도의
+> `docker network connect` 없이 바로 `db-migration-control-plane` 로 연결된다.
+> kind 클러스터를 재생성해도 포워더는 그대로 동작한다.
+
+| 출발 | 목적 | URL |
+|------|------|-----|
+| 호스트 브라우저 | ArgoCD UI | https://localhost:30443 |
+| Jenkins 컨테이너 | ArgoCD API | https://db-migration-argocd-fwd:30443 |
+
+> 자체 서명 인증서이므로 브라우저 경고 무시 / CLI 는 `--insecure` 사용.
+> ArgoCD CLI 호출 시에는 gRPC-Web 모드 권장: `argocd login ... --grpc-web --insecure`.
+
+**확인**:
+
+```bash
+# 포워더 동작 확인
+curl -k https://localhost:30443/healthz
+
+# Jenkins 컨테이너에서
+docker exec db-migration-jenkins curl -k https://db-migration-argocd-fwd:30443/healthz
+```
+
+**정리**:
+
+```bash
+docker compose -f db-migration/infra/docker-compose.argocd-fwd.yml down
 ```
 
 ---

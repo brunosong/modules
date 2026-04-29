@@ -1,0 +1,48 @@
+# ArgoCD NodePort 포트포워더 (호스트 / 다른 컨테이너 → kind 노드)
+#
+# kind 클러스터는 컨테이너 안에서 동작하므로 NodePort 30443 이
+# 호스트로 자동 노출되지 않는다. (kind-config.yml 의 extraPortMappings 가
+# 클러스터 생성 시점에만 적용됨 → 클러스터 재생성 없이 포트를 추가할 수 없음)
+#
+# 이 compose 는 socat 컨테이너 하나를 db-migration-net 에 띄워서
+#   호스트:30443 → socat:30443 → db-migration-control-plane:30443
+# 경로로 우회 노출한다.
+#
+# 사전 준비 (한 번만):
+#   ArgoCD Service 가 NodePort 로 떠 있는지 확인.
+#     kubectl apply -f db-migration/infra/argocd-server-nodeport.yml
+#
+# 기동:
+#   docker compose -f db-migration/infra/docker-compose.argocd-fwd.yml up -d
+#
+# 접근:
+#   - 호스트 브라우저: https://localhost:30443
+#   - 같은 네트워크 컨테이너 (Jenkins 등): https://db-migration-argocd-fwd:30443
+#
+# 네트워크 구조:
+#   socat 컨테이너를 두 네트워크에 동시에 붙인다.
+#   - db-migration-net : Jenkins / GitLab / MySQL 등이 컨테이너명으로 socat 호출 가능
+#   - kind             : kind 컨트롤플레인 (db-migration-control-plane) 으로 직접 연결
+#   → kind 클러스터를 재생성해도 control-plane 컨테이너가 같은 네트워크에 새로 붙으므로
+#     포워더는 별도 작업 없이 다시 동작한다.
+name: db-migration-argocd-fwd
+
+services:
+  argocd-fwd:
+    image: alpine/socat:latest
+    container_name: db-migration-argocd-fwd
+    restart: unless-stopped
+    ports:
+      - "30443:30443"
+    command: TCP-LISTEN:30443,fork,reuseaddr TCP-CONNECT:db-migration-control-plane:30443
+    networks:
+      - db-migration-net
+      - kind
+
+networks:
+  db-migration-net:
+    name: db-migration-net
+    external: true
+  kind:
+    name: kind
+    external: true

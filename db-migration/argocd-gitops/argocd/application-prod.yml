@@ -7,7 +7,7 @@ spec:
   project: default
 
   source:
-    repoURL: https://github.com/brunosong/modules.git
+    repoURL: http://host.docker.internal:8090/brunosong/modules.git
     targetRevision: master
     path: db-migration/argocd-gitops/k8s
 

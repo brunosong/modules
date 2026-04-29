@@ -1,0 +1,41 @@
+# ArgoCD 서버를 NodePort 로 노출.
+#
+# 적용:
+#   kubectl apply -f db-migration/infra/argocd-server-nodeport.yml
+#
+# 접근:
+#   - 호스트(브라우저)            : https://localhost:30443
+#   - Jenkins 컨테이너 (db-migration-net 에 kind 노드를 connect 해 둔 경우)
+#                                 : https://db-migration-kind-control-plane:30443
+#                                   (kind 컨트롤플레인 컨테이너 이름은 환경에 따라 다름 — `docker ps` 로 확인)
+#
+# 주의:
+#   - argocd-server 는 자체적으로 TLS 종료를 하므로 https 로 접근.
+#     자체 서명 인증서라 CLI/curl 에서는 --insecure 또는 -k 필요.
+#   - ArgoCD CLI 호출 시 grpc-web 모드 권장:  argocd login ... --grpc-web --insecure
+#   - 이 매니페스트는 기본 'argocd-server' Service 의 type 만 NodePort 로 바꾸고
+#     30443 포트를 고정한다. Helm 으로 설치한 경우 values.yaml 의
+#     server.service.type=NodePort 로 박는 편이 더 깔끔.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: argocd-server
+  namespace: argocd
+  labels:
+    app.kubernetes.io/component: server
+    app.kubernetes.io/name: argocd-server
+    app.kubernetes.io/part-of: argocd
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: argocd-server
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      nodePort: 30080
+    - name: https
+      port: 443
+      targetPort: 8080
+      nodePort: 30443

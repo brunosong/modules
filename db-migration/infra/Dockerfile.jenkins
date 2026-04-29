@@ -25,6 +25,10 @@ RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/s
 RUN curl -Lo /usr/local/bin/kind https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64 \
     && chmod +x /usr/local/bin/kind
 
+# ArgoCD CLI (Jenkins 파이프라인에서 app sync / app wait 호출용)
+RUN curl -Lo /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64 \
+    && chmod +x /usr/local/bin/argocd
+
 # JDK 17 (Temurin) — Gradle toolchain auto-detection 이 /usr/lib/jvm 아래를 자동 검색
 RUN apt-get update && apt-get install -y wget gnupg \
     && wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor -o /usr/share/keyrings/adoptium.gpg \
