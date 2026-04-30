@@ -1,0 +1,137 @@
+// CI + CD 통합 파이프라인 (CI-driven sync 패턴)
+//
+// 흐름:
+//   1) Update Manifest — 공유 라이브러리 updateGitOpsManifest 가 GitLab Commits API 로
+//      매니페스트 repo 에 image 필드 교체 커밋을 만들고 full SHA 를 반환.
+//   2) Trigger ArgoCD sync — 1) 에서 받은 SHA 를 --revision 으로 지정해 ArgoCD 에 sync.
+//   3) Wait for Healthy — Synced & Healthy & revision 일치까지 폴링.
+//
+// 전제:
+//   - ArgoCD Application (db-migration) 의 syncPolicy.automated 는 비워두는 것을 권장.
+//     자동 sync 가 켜져 있어도 동작은 하지만, 두 군데서 sync 를 시도해 의미가 약해짐.
+//
+// 사전 준비 (Jenkins → Manage Jenkins → Credentials)
+//   - Secret text, ID: gitlab-api-token   (GitLab PAT, api scope)
+//   - Secret text, ID: argocd-auth-token  (argocd account generate-token 결과)
+//
+// Jenkins 컨테이너에서 ArgoCD 서버에 닿을 수 있어야 함.
+// kind 클러스터의 argocd-server 를 호스트로 port-forward 했다면
+// Jenkins → host.docker.internal:8081 로 접근 가능.
+
+@Library('shared-jira') _
+
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'IMAGE_TAG',  defaultValue: '12690fe',                            description: '배포할 이미지 태그')
+        string(name: 'IMAGE_REPO', defaultValue: 'localhost:5001/db-migration-argocd', description: '레지스트리 + 이미지 이름')
+    }
+
+    environment {
+        ARGOCD_HOST   = 'http://host.docker.internal:8081'
+        ARGOCD_APP    = 'db-migration'
+        SYNC_TIMEOUT  = '300'
+        POLL_INTERVAL = '5'
+    }
+
+    options {
+        disableConcurrentBuilds()
+    }
+
+    stages {
+
+        stage('Update Manifest') {
+            steps {
+                script {
+                    env.MANIFEST_COMMIT_SHA = updateGitOpsManifest(
+                        projectId: '53',
+                        branch:    'master',
+                        filePath:  'db-migration/argocd-gitops/k8s/image-patch.yaml',
+                        imageRepo: params.IMAGE_REPO,
+                        imageTag:  params.IMAGE_TAG
+                    )
+                    echo "Captured MANIFEST_COMMIT_SHA = ${env.MANIFEST_COMMIT_SHA}"
+                }
+            }
+        }
+
+        stage('Trigger ArgoCD sync') {
+            steps {
+                withCredentials([string(credentialsId: 'argocd-auth-token', variable: 'ARGOCD_TOKEN')]) {
+                    sh '''
+                        set -e
+                        echo "Sync ${ARGOCD_APP} → revision ${MANIFEST_COMMIT_SHA}"
+
+                        HTTP_CODE=$(curl --silent --show-error --output /tmp/argocd_sync.json --write-out "%{http_code}" \
+                            --request POST \
+                            --header "Authorization: Bearer ${ARGOCD_TOKEN}" \
+                            --header "Content-Type: application/json" \
+                            --data "{\\"revision\\":\\"${MANIFEST_COMMIT_SHA}\\",\\"prune\\":true}" \
+                            "${ARGOCD_HOST}/api/v1/applications/${ARGOCD_APP}/sync")
+
+                        echo "HTTP ${HTTP_CODE}"
+                        cat /tmp/argocd_sync.json
+                        echo
+
+                        case "$HTTP_CODE" in
+                            2*) ;;
+                            *)  echo "ArgoCD sync trigger failed"; exit 1 ;;
+                        esac
+                    '''
+                }
+            }
+        }
+
+        stage('Wait for Healthy') {
+            steps {
+                withCredentials([string(credentialsId: 'argocd-auth-token', variable: 'ARGOCD_TOKEN')]) {
+                    sh '''
+                        set -e
+                        ELAPSED=0
+                        while [ $ELAPSED -lt ${SYNC_TIMEOUT} ]; do
+                            curl --silent --show-error \
+                                --header "Authorization: Bearer ${ARGOCD_TOKEN}" \
+                                "${ARGOCD_HOST}/api/v1/applications/${ARGOCD_APP}" \
+                                -o /tmp/argocd_status.json
+
+                            SYNC=$(sed -n 's/.*"sync":{"status":"\\([^"]*\\)".*/\\1/p' /tmp/argocd_status.json | head -n1)
+                            HEALTH=$(sed -n 's/.*"health":{"status":"\\([^"]*\\)".*/\\1/p' /tmp/argocd_status.json | head -n1)
+                            REV=$(sed -n 's/.*"sync":{[^}]*"revision":"\\([0-9a-f]*\\)".*/\\1/p' /tmp/argocd_status.json | head -n1)
+
+                            echo "[${ELAPSED}s] sync=${SYNC} health=${HEALTH} revision=$(echo ${REV} | cut -c1-8)"
+
+                            if [ "$SYNC" = "Synced" ] && [ "$HEALTH" = "Healthy" ] \
+                               && [ "$REV" = "${MANIFEST_COMMIT_SHA}" ]; then
+                                echo "Deploy verified: ${ARGOCD_APP} @ ${REV}"
+                                exit 0
+                            fi
+
+                            if [ "$HEALTH" = "Degraded" ] && [ "$REV" = "${MANIFEST_COMMIT_SHA}" ]; then
+                                echo "Application is Degraded"
+                                cat /tmp/argocd_status.json
+                                exit 1
+                            fi
+
+                            sleep ${POLL_INTERVAL}
+                            ELAPSED=$((ELAPSED + ${POLL_INTERVAL}))
+                        done
+
+                        echo "Timeout (${SYNC_TIMEOUT}s) — sync 또는 health 가 정상 상태로 진입하지 않음"
+                        cat /tmp/argocd_status.json
+                        exit 1
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "CI + CD 완료: ${env.ARGOCD_APP} @ ${env.MANIFEST_COMMIT_SHA}"
+        }
+        failure {
+            echo "파이프라인 실패 — 매니페스트 commit 또는 ArgoCD sync 결과를 확인하세요."
+        }
+    }
+}

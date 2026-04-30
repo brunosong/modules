@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(docker compose *)",
-      "Bash(docker inspect db-migration-control-plane *)"
+      "Bash(docker inspect db-migration-control-plane *)",
+      "Bash(kubectl get cm *)",
+      "Bash(kubectl get applications *)",
+      "Bash(kubectl patch cm *)",
+      "Bash(kubectl rollout *)"
     ]
   }
 }

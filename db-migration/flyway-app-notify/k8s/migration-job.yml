@@ -1,0 +1,38 @@
+# 단점 재현용 K8s Job 매니페스트.
+# backoffLimit 이 3 이라 실패 시 콜백이 최대 4번 호출됨 → Teams/Jira 에 동일 실패 알림이 4번 박힘.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: flyway-app-notify
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: flyway-app-notify:latest
+          env:
+            - name: DB_HOST
+              value: mysql
+            - name: NOTIFY_ENV
+              value: prod
+            - name: NOTIFY_ENABLED
+              value: "true"
+            # 시크릿이 마이그레이션 컨테이너에 직접 주입됨 — DB 권한 + 외부 API 권한 동거
+            - name: TEAMS_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef: { name: notify-secrets, key: teamsWebhookUrl }
+            - name: JIRA_BASE_URL
+              valueFrom:
+                secretKeyRef: { name: notify-secrets, key: jiraBaseUrl }
+            - name: JIRA_EMAIL
+              valueFrom:
+                secretKeyRef: { name: notify-secrets, key: jiraEmail }
+            - name: JIRA_API_TOKEN
+              valueFrom:
+                secretKeyRef: { name: notify-secrets, key: jiraApiToken }
+            - name: JIRA_ISSUE_KEY
+              value: PROJ-123
+            - name: JIRA_DONE_TRANSITION_ID
+              value: "31"

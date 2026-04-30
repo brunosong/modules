@@ -1,12 +1,4 @@
 # GitLab CE — MR(=PR) 트리거 / Webhook 발신
-#
-# project name 을 'jenkins-gitlab-mr' 로 박아서 기존 볼륨
-# (jenkins-gitlab-mr_gitlab-config / -data / -logs) 를 그대로 사용.
-#
-# 네트워크: docker-compose.jenkins.yml 과 공유하는 'db-migration-net'.
-# 사용 전 한 번만:
-#   docker network create db-migration-net
-#
 # 사용:
 #   docker compose -f db-migration/infra/docker-compose.gitlab.yml up -d
 name: db-migration-gitlab

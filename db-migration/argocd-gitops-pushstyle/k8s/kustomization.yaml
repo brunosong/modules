@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - migration-job.yml
+  - db-secret.yml
+
+# Jenkins 파이프라인이 image-patch.yaml 을 매번 덮어써서
+# Job 의 컨테이너 이미지 태그만 갱신한다. (JSON6902 patch)
+patches:
+  - path: image-patch.yaml
+    target:
+      kind: Job
+      name: db-migration-argocd-job

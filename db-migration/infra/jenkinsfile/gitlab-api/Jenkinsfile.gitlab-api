@@ -1,0 +1,51 @@
+// GitLab REST API 로 매니페스트 repo 에 commit 만 날리는 파이프라인.
+// (이미지 빌드/푸시는 다른 파이프라인 또는 사람이 한 뒤,
+//  여기서는 새 이미지 태그를 매니페스트에 박는 commit 만 수행)
+//
+// 사전 준비 (Jenkins → Manage Jenkins → Credentials)
+//   - Kind: Secret text
+//     ID:   gitlab-api-token
+//     Secret: <GitLab Personal Access Token (api scope)>
+//
+// 매니페스트 image-patch.yaml 형식 (Kustomize JSON6902 patch):
+//   - op: replace
+//     path: /spec/template/spec/containers/0/image
+//     value: <registry>/<image>:<tag>
+
+@Library('shared-jira') _
+
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'IMAGE_TAG',  defaultValue: '12690fe',                            description: '배포할 이미지 태그')
+        string(name: 'IMAGE_REPO', defaultValue: 'localhost:5001/db-migration-argocd', description: '레지스트리 + 이미지 이름')
+    }
+
+    options {
+        disableConcurrentBuilds()
+    }
+
+    stages {
+        stage('Update Manifest') {
+            steps {
+                updateGitOpsManifest(
+                    projectId: '53',
+                    branch:    'master',
+                    filePath:  'db-migration/argocd-gitops/k8s/image-patch.yaml',
+                    imageRepo: params.IMAGE_REPO,
+                    imageTag:  params.IMAGE_TAG
+                )
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Manifest commit 완료. ArgoCD 가 곧 sync 합니다."
+        }
+        failure {
+            echo "GitLab API commit 실패 — 응답 본문을 확인하세요 (/tmp/gl_resp.json)."
+        }
+    }
+}

@@ -1,0 +1,55 @@
+pipeline {
+    agent any
+
+    environment {
+        REGISTRY   = 'localhost:5001'
+        IMAGE_NAME = 'db-migration-flyway-argo'
+        GIT_REPO   = 'brunosong/modules.git'
+        GIT_BRANCH = 'master'
+    }
+
+    options {
+        disableConcurrentBuilds()
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    def buildDate = sh(
+                        script: 'date +%Y%m%d',
+                        returnStdout: true
+                    ).trim()
+                    env.IMAGE_TAG = "${buildDate}-${env.BUILD_NUMBER}"
+                }
+                echo "Building image tag: ${env.IMAGE_TAG}"
+            }
+        }
+
+        stage('Build Jar') {
+            steps {
+                sh 'chmod +x gradlew'
+                sh './gradlew :db-migration:argocd-gitops:bootJar --no-daemon'
+            }
+        }
+
+        stage('Build & Push Image') {
+            steps {
+                sh '''
+                    docker build \
+                        -f db-migration/infra/Dockerfile.app \
+                        -t "$REGISTRY/$IMAGE_NAME:$IMAGE_TAG" \
+                        db-migration/argocd-gitops
+                    docker push "$REGISTRY/$IMAGE_NAME:$IMAGE_TAG"
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Pushed $REGISTRY/$IMAGE_NAME:$IMAGE_TAG. ArgoCD will sync shortly."
+        }
+    }
+}

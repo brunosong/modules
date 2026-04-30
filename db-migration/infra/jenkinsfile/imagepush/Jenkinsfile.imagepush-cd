@@ -1,0 +1,165 @@
+// 이미지 빌드/푸시 + 매니페스트 commit + ArgoCD sync + 풍부한 Git 정보 알림 (Teams/Jira)
+// 단일 파이프라인.
+//
+// 흐름:
+//   1) Checkout                  — 소스 체크아웃
+//   2) Capture Source Git Info   — env.SRC_* 채움 (앱 레포 commit metadata)
+//   3) Build Jar
+//   4) Build & Push Image        — IMAGE_TAG = YYYYMMDD-{BUILD_NUMBER}
+//   5) Update Manifest           — GitLab Commits API → env.MFT_* 채움
+//   6) ArgoCD Sync               — sync + wait + env.CD_* 채움
+//   7) post                      — notifyDeploy() 한 번 호출 → Teams + Jira 양쪽 송신
+//
+// 사전 준비 (Jenkins → Manage Jenkins → Credentials)
+//   - Secret text, ID: db-migration-manifest-token  (GitLab PAT, api scope)
+//   - Secret text, ID: argocd-auth-token            (argocd account generate-token)
+//   - Secret text, ID: teams-webhook-url            (Teams Incoming Webhook URL)
+//   - Username with password 또는 PAT, jiraAddComment/jiraTransition 가 사용하는 크레덴셜
+//
+// 알림에 담기는 Git 정보 (3가지 소스):
+//   - Source repo  : SHA, short, author, email, subject, date, changed files
+//   - Manifest repo: SHA, short, web URL, author, message
+//   - ArgoCD       : revision, sync/health/phase, prev revision (rollback 후보)
+
+@Library('shared-jira') _
+
+pipeline {
+    agent any
+
+    environment {
+        REGISTRY      = 'localhost:5001'
+        IMAGE_NAME    = 'db-migration-flyway-argo'
+        ARGOCD_SERVER = 'host.docker.internal:30443'
+        ARGOCD_APP    = 'flyway-dev'
+
+        // GitOps 매니페스트 레포
+        GITOPS_HOST   = 'http://host.docker.internal:8090'
+        GITOPS_PROJECT_ID = '5'
+        GITOPS_BRANCH = 'main'
+        GITOPS_FILE   = 'dev/image-patch.yaml'
+    }
+
+    options {
+        disableConcurrentBuilds()
+        timestamps()
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    def buildDate = sh(script: 'date +%Y%m%d', returnStdout: true).trim()
+                    env.IMAGE_TAG = "${buildDate}-${env.BUILD_NUMBER}"
+                }
+                echo "Building image tag: ${env.IMAGE_TAG}"
+            }
+        }
+
+        stage('Capture Source Git Info') {
+            steps {
+                captureGitInfo()
+            }
+        }
+
+        stage('Build Jar') {
+            steps {
+                sh 'chmod +x gradlew'
+                sh './gradlew :db-migration:argocd-gitops:bootJar --no-daemon'
+            }
+        }
+
+        stage('Build & Push Image') {
+            steps {
+                sh '''
+                    docker build \
+                        -f db-migration/infra/Dockerfile.app \
+                        -t "$REGISTRY/$IMAGE_NAME:$IMAGE_TAG" \
+                        db-migration/argocd-gitops
+                    docker push "$REGISTRY/$IMAGE_NAME:$IMAGE_TAG"
+                '''
+            }
+        }
+
+        stage('Update Manifest') {
+            steps {
+                script {
+                    def m = updateGitOpsManifest(
+                        gitlabHost:   env.GITOPS_HOST,
+                        projectId:    env.GITOPS_PROJECT_ID,
+                        branch:       env.GITOPS_BRANCH,
+                        filePath:     env.GITOPS_FILE,
+                        imageRepo:    "${env.REGISTRY}/${env.IMAGE_NAME}",
+                        imageTag:     env.IMAGE_TAG,
+                        credentialId: 'db-migration-manifest-token'
+                    )
+                    env.MFT_SHA    = m.sha
+                    env.MFT_SHORT  = m.short
+                    env.MFT_URL    = m.url
+                    env.MFT_AUTHOR = m.author
+                    env.MFT_MSG    = m.message
+                    echo "Manifest commit: ${m.short} by ${m.author} — ${m.message}"
+                }
+            }
+        }
+
+        stage('Argocd Sync') {
+            steps {
+                withCredentials([string(
+                    credentialsId: 'argocd-auth-token',
+                    variable: 'ARGOCD_AUTH_TOKEN'
+                )]) {
+                    sh '''
+                        set -e
+
+                        # argocd CLI 미설치 시 워크스페이스에 한 번만 다운로드
+                        if ! command -v argocd >/dev/null 2>&1; then
+                            echo "argocd CLI 미설치 — 워크스페이스에 다운로드합니다."
+                            curl -sSL -o "$WORKSPACE/argocd" \
+                                https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+                            chmod +x "$WORKSPACE/argocd"
+                            export PATH="$WORKSPACE:$PATH"
+                        fi
+
+                        argocd app sync "$ARGOCD_APP" \
+                            --server "$ARGOCD_SERVER" --insecure --grpc-web \
+                            --revision "$MFT_SHA" \
+                            --prune --timeout 300
+
+                        argocd app wait "$ARGOCD_APP" \
+                            --server "$ARGOCD_SERVER" --insecure --grpc-web \
+                            --operation --health --timeout 300
+                    '''
+
+                    // 결과 캡처 — 위에서 다운로드한 argocd 가 PATH 에 있어야 동작
+                    sh '''
+                        if ! command -v argocd >/dev/null 2>&1 && [ -x "$WORKSPACE/argocd" ]; then
+                            export PATH="$WORKSPACE:$PATH"
+                        fi
+                    '''
+                    script {
+                        // captureArgoStatus 가 동일 sh 컨텍스트가 아니므로 PATH 보정
+                        env.PATH = "${env.WORKSPACE}:${env.PATH}"
+                        captureArgoStatus(app: env.ARGOCD_APP, server: env.ARGOCD_SERVER)
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            notifyDeploy(
+                status:           'SUCCESS',
+                teamsCredentialId:'teams-webhook-url'
+                // doneTransitionId: '31'  // 필요 시 Jira Done 전이
+            )
+        }
+        failure {
+            notifyDeploy(
+                status:           'FAILURE',
+                teamsCredentialId:'teams-webhook-url'
+            )
+        }
+    }
+}

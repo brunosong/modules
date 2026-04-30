@@ -1,0 +1,18 @@
+group = 'com.brunosong'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+// 이 모듈은 Spring Boot 실행 가능한 앱으로 동작 (K8s Job 또는 CLI 실행 가정)
+tasks.named('bootJar') { enabled = true }
+tasks.named('jar') { enabled = false }
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    implementation 'org.springframework.boot:spring-boot-starter-webflux' // WebClient (Teams/Jira 호출)
+    implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-mysql'
+    runtimeOnly 'com.mysql:mysql-connector-j'
+}

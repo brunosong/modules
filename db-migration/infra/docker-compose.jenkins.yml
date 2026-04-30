@@ -1,13 +1,5 @@
 # Jenkins (커스텀 이미지: docker CLI + kubectl + kind) + DinD + 외부 MySQL
 #
-# project name 을 'jenkins-k8s-job' 로 박아서 기존 볼륨
-# (jenkins-k8s-job_jenkins-home / -docker-certs / -mysql-data) 와
-# 컨테이너명 (jenkins-k8s / jenkins-dind / ncp-cloud-db) 을 그대로 사용.
-#
-# 네트워크: docker-compose.gitlab.yml 과 공유하는 'db-migration-net'.
-# 사용 전 한 번만:
-#   docker network create db-migration-net
-#
 # 사용:
 #   docker compose -f db-migration/infra/docker-compose.jenkins.yml up -d
 name: db-migration-jenkins

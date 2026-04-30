@@ -30,7 +30,7 @@ metadata:
   namespace: default
 spec:
   ports:
-    - port: 3306          # Pod가 호출하는 포트
+    - port: 3308          # Pod가 호출하는 포트
       targetPort: 3306    # 실제 DB 포트
 
 ---
